@@ -27,6 +27,11 @@ class BayesianNetwork(nn.Module):
         x = torch.relu(self.blinear2(x))
         return self.blinear3(x)
 
+################################################################
+################################################################
+#### OLD CODE - yet to be implemented into the RUN_BNN code ####
+################################################################
+################################################################
 class Train_BNN:
     def __init__(self, model, train_loader, train_dataset, test_loader, test_dataset):
         self.model = model

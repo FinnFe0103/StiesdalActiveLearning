@@ -1,29 +1,19 @@
 from Models.BNN import BayesianNetwork
-from data import Dataprep
+from data import Dataprep, update_data, load_data
 import argparse
 from torch.optim import Adam
 from torch.utils.data import random_split
 from torch.utils.data import DataLoader
+from sklearn.model_selection import train_test_split
 import time
 import random
 
 class RunModel:
-    def __init__(self, model_name, hidden_size, rounds, epochs, dataset_type, sensor, initial_samplesize, 
+    def __init__(self, model_name, hidden_size, rounds, epochs, dataset_type, sensor, samples_per_round, 
                  validation_size, learning_rate, active_learning, directory, tensorboard, verbose):
         
-        data = Dataprep(dataset_type, initial_samplesize, sensor)
-        self.known_data, self.pool_data = data.known_data, data.pool_data
-
-
-        # Data selection (maybe move into the data.py file later on)
-        # if dataset_type == 'Caselist':
-        #     raise ValueError('Not implemented yet') # Load the caselist
-        
-        # elif dataset_type.split('_')[0] == 'Generated':
-        #     dataset_size = int(dataset_type.split('_')[1]) # Size of the generated dataset
-        #     data = Dataprep(dataset_size, initial_samplesize) # Load the data
-        #     self.x_selected, self.y_selected = data.x_selected, data.y_selected # Save the known data
-        #     self.x_pool, self.y_pool = data.x_pool, data.y_pool # Save the pool data
+        self.data = Dataprep(dataset_type, sensor, initial_samplesize=samples_per_round)
+        self.known_data, self.pool_data = self.data.known_data, self.data.pool_data
 
         self.validation_size = validation_size # Size of the validation set in percentage
 
@@ -58,25 +48,26 @@ class RunModel:
         return optimizer
     
     def train_model(self):
-        # INPUT TRAIN AND VALIDATION DATA
-        # OUTPUT TRAINED MODEL
-        # PASS TO PREDICTION METHOD THAT RETURNS THE INDICES OF THE NEXT SAMPLES TO BE SELECTED
-
         # Split the pool data into train and validation sets
-    
+        train, val = train_test_split(self.known_data, test_size=self.validation_size)
+        train_loader = load_data(train)
+        val_loader = load_data(train)
 
         for epoch in range(self.epochs):
             if self.verbose:
                 start_epoch = time.time()
                 print('Epoch: {} of {}, time-taken: {:.2f} seconds'.format(epoch+1, self.epochs, time.time() - start_epoch))
+                #load_data
 
-        
+    def predict(self, x):
+        pass
 
-    def select_samples(self, n):
-        selected_indices = random.sample(range(len(self.pool_dataset)), n)
-        print(selected_indices)
-        
-        # self.known_dataset.extend(random_samples)
+    def acquisition_function(self, n): # acquisition function
+        selected_indices = random.sample(range(len(self.pool_data)), n)
+        self.known_data, self.pool_data = update_data(self.known_data, self.pool_data, selected_indices)
+
+        print(self.pool_data.shape)
+        print(self.known_data.shape)
 
 
 if __name__ == '__main__':
@@ -87,7 +78,7 @@ if __name__ == '__main__':
     parser.add_argument('-e', '--epochs', type=int, default=10, help='Number of epochs')
     parser.add_argument('-ds', '--dataset_type', type=str, default='Caselist', help='1. Generated_2000, 2. Caselist')
     parser.add_argument('-s', '--sensor', type=str, default='foundation_origin xy FloaterOffset [m]', help='Sensor to be predicted')
-    parser.add_argument('-is', '--initial_samplesize', type=int, default=100, help='Initial sample size')
+    parser.add_argument('-is', '--samples_per_round', type=int, default=100, help='Samples to be selected per round and initial samplesize')
     parser.add_argument('-vs', '--validation_size', type=int, default=0.1, help='Size of the validation set in percentage')
     parser.add_argument('-lr', '--learning_rate', type=str, default=0.01, help='Learning rate')
     parser.add_argument('-al', '--active_learning', type=bool, default=False, help='Use active learning')
@@ -97,22 +88,15 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     model = RunModel(args.model, args.hidden_size, args.rounds, args.epochs, args.dataset_type, args.sensor,
-                     args.initial_samplesize, args.validation_size, args.learning_rate, args.active_learning,
+                     args.samples_per_round, args.validation_size, args.learning_rate, args.active_learning,
                      args.directory, args.tensorboard, args.verbose)
-
-    print(len(model.pool_dataset))#.dataset.tensors[0].shape)
 
     # Train the model
     for round in range(model.rounds):
-        
-    
-
-
-
         start_round = time.time()
         model.train_model() # Train the model
         print('Round: {} of {}, time-taken: {:.2f} seconds'.format(round+1, model.rounds, time.time() - start_round))
-        model.select_samples(10) # Select the next samples from the pool
+        model.acquisition_function(args.samples_per_round) # Select the next samples from the pool
 
         # Save the model after each round and read it back in for the training
         #model.save_model()
