@@ -20,7 +20,7 @@ class Dataprep:
             dataset_size = int(dataset_type.split('_')[1])
             self.x, self.y = self.generate_data(-10, 10, dataset_size)
 
-        self.x, self.y = self.normalize_data(self.x, self.y)
+        #self.x, self.y = self.normalize_data(self.x, self.y)
         self.known_data, self.pool_data = self.initial_sample(self.x, self.y, initial_samplesize)
 
     # Generate synthetic data
@@ -138,8 +138,10 @@ def update_data(k_d, p_d, indices):
 
 # Split the features and target and load the data into a torch DataLoader
 def load_data(numpy_array, batch_size = 16):
-    features = numpy_array[:, :-1]  # All but the last column
+    features = numpy_array[:, :-1]#.squeeze()  # All but the last column
     targets = numpy_array[:, -1]    # Last column
+    print('Features and targets shape:', features.shape, targets.shape)
+
     torch_dataset = TensorDataset(torch.tensor(features), torch.tensor(targets))
     torch_loader = DataLoader(torch_dataset, batch_size=batch_size, shuffle=True)
     return torch_loader

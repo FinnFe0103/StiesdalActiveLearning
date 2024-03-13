@@ -14,13 +14,13 @@ from torch.utils.tensorboard import SummaryWriter
 
 @variational_estimator
 class BayesianNetwork(nn.Module):
-    def __init__(self, hidden_size=4):
+    def __init__(self, input_dim, hidden_size=4):
         super().__init__()
         hidden_size = hidden_size
 
-        self.blinear1 = BayesianLinear(1, hidden_size, prior_sigma_1=50)
-        self.blinear2 = BayesianLinear(hidden_size, hidden_size, prior_sigma_1=50)
-        self.blinear3 = BayesianLinear(hidden_size, 1, prior_sigma_1=50)
+        self.blinear1 = BayesianLinear(input_dim, hidden_size, prior_sigma_1=1)
+        self.blinear2 = BayesianLinear(hidden_size, hidden_size, prior_sigma_1=1)
+        self.blinear3 = BayesianLinear(hidden_size, 1, prior_sigma_1=1)
 
     def forward(self, x):
         x = torch.relu(self.blinear1(x))
