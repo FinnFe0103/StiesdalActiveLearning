@@ -7,4 +7,5 @@ torch
 argparse
 seaborn
 datetime
-blitz
+blitz-bayesian-pytorch
+tensorboard
