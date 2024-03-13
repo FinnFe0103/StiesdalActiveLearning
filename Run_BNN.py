@@ -59,6 +59,8 @@ class RunModel:
         return optimizer
     
     def train_model(self, step):
+        print('K_D, P_D', self.known_data.shape, self.pool_data.shape)
+
         # Split the pool data into train and validation sets
         train, val = train_test_split(self.known_data, test_size=self.validation_size)
         train_loader = load_data(train)
@@ -89,7 +91,7 @@ class RunModel:
 
             # Average loss for the current epoch
             epoch_train_loss = total_train_loss / len(train_loader) # Average loss over batches
-            self.writer.add_scalar('Train loss', epoch_train_loss, epoch+1)
+            self.writer.add_scalar('loss/train', epoch_train_loss, step*10+epoch+1)
             if self.verbose:
                 print('Step: {}, Epoch: {} of {}, Train-Loss: {:.4f}, time-taken: {:.2f} seconds'.format(step+1, epoch+1, self.epochs, epoch_train_loss, time.time() - start_epoch))
 
@@ -109,7 +111,7 @@ class RunModel:
                 total_val_loss += loss.item()
 
         step_val_loss = total_val_loss / len(val_loader) # Average loss over batches
-        self.writer.add_scalar('Val loss', step_val_loss, step+1)
+        self.writer.add_scalar('loss/val', step_val_loss, step+1)
         if self.verbose:
             print('Step: {}, Val-Loss: {:.4f}'.format(step+1, step_val_loss))
 

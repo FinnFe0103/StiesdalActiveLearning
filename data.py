@@ -20,7 +20,7 @@ class Dataprep:
             dataset_size = int(dataset_type.split('_')[1])
             self.x, self.y = self.generate_data(-10, 10, dataset_size)
 
-        #self.x, self.y = self.normalize_data(self.x, self.y)
+        self.x, self.y = self.normalize_data(self.x, self.y)
         self.known_data, self.pool_data = self.initial_sample(self.x, self.y, initial_samplesize)
 
     # Generate synthetic data
@@ -49,7 +49,6 @@ class Dataprep:
     
     # Normalize the data using MinMaxScaler
     def normalize_data(self, x, y):
-        
         scaler_x = MinMaxScaler() # Initialize the scaler for x
         scaler_y = MinMaxScaler() # Initialize the scaler for y
         
