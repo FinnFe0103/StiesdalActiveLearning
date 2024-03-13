@@ -1,14 +1,10 @@
 numpy
-math
 scipy
 pandas
 matplotlib
-sklearn
+scikit-learn
 torch
 argparse
-time
-random
 seaborn
-os
 datetime
 blitz
