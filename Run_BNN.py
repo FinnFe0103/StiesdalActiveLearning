@@ -27,8 +27,6 @@ class RunModel:
 
         self.data = Dataprep(dataset_type, sensor, initial_samplesize=samples_per_step)
         self.known_data, self.pool_data = self.data.known_data, self.data.pool_data
-        print(self.known_data.shape)
-        print(self.known_data.shape[1]-1)
 
         self.validation_size = validation_size # Size of the validation set in percentage
 
@@ -64,7 +62,7 @@ class RunModel:
         # Split the pool data into train and validation sets
         train, val = train_test_split(self.known_data, test_size=self.validation_size)
         train_loader = load_data(train)
-        val_loader = load_data(train)
+        val_loader = load_data(val)
 
         self.model.to(self.device) # move the model to the configured device
 
@@ -75,7 +73,8 @@ class RunModel:
             for x, y in train_loader:
                 x, y = x.to(self.device), y.to(self.device)
                 self.optimizer.zero_grad()
-                loss = self.model.sample_elbo(inputs=x.to(torch.float32), labels=y.to(torch.float32), 
+
+                loss = self.model.sample_elbo(inputs=x.to(torch.float32), labels=y.to(torch.float32).unsqueeze(1), 
                                               criterion=self.criterion, sample_nbr=1,
                                               complexity_cost_weight=0.01/len(train_loader.dataset))
                 loss.backward()
@@ -90,7 +89,7 @@ class RunModel:
 
             # Average loss for the current epoch
             epoch_train_loss = total_train_loss / len(train_loader) # Average loss over batches
-            self.writer.add_scalar('Train loss', epoch_train_loss, step+1)
+            self.writer.add_scalar('Train loss', epoch_train_loss, epoch+1)
             if self.verbose:
                 print('Step: {}, Epoch: {} of {}, Train-Loss: {:.4f}, time-taken: {:.2f} seconds'.format(step+1, epoch+1, self.epochs, epoch_train_loss, time.time() - start_epoch))
 
@@ -104,7 +103,7 @@ class RunModel:
             for x, y in val_loader:
                 x, y = x.to(self.device), y.to(self.device)
                 # Calculate loss using sample_elbo for Bayesian inference
-                loss = self.model.sample_elbo(inputs=x.to(torch.float32), labels=y.to(torch.float32),
+                loss = self.model.sample_elbo(inputs=x.to(torch.float32), labels=y.to(torch.float32).unsqueeze(1),
                                             criterion=self.criterion, sample_nbr=3,
                                             complexity_cost_weight=0.01/len(val_loader.dataset))
                 total_val_loss += loss.item()
@@ -118,8 +117,6 @@ class RunModel:
             self.plot(step)
     
     def plot(self, step, samples=500):
-
-
         x_pool = self.pool_data[:, :-1]
         y_pool = self.pool_data[:, -1]
 
@@ -146,8 +143,11 @@ class RunModel:
         plt.scatter(x_pool, y_pool, c="green", marker="*", alpha=0.1)  # Plot actual y values
         plt.scatter(x_selected, y_selected, c="red", marker="*", alpha=0.2) # plot train data on top
         plt.title(f'Predictions vs Actual Step {step+1}')
-        plt.legend(['Mean prediction', '+2 Std Dev', '-2 Std Dev', 'Actual'])
-        plt.show()
+        plt.legend(['Mean prediction', 'Pool data (unseen)', 'Seen data'], fontsize='small')
+        plt.close(fig)
+
+        # Log the table figure
+        self.writer.add_figure(f'Prediction vs Actual Table Epoch {step+1}', fig, step+1)
 
     def predict(self, x): # 2: PREDICT THE UNCERTAINTY ON THE POOL DATA
         pass
@@ -164,17 +164,17 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Run the BNN model')
     parser.add_argument('-m', '--model', type=str, default='BNN', help='1. BNN, 2. MC Dropout, 3. Deep Ensembles')
     parser.add_argument('-hs', '--hidden_size', type=int, default=4, help='Number of hidden units')
-    parser.add_argument('-r', '--steps', type=int, default=2, help='Number of steps')
+    parser.add_argument('-s', '--steps', type=int, default=2, help='Number of steps')
     parser.add_argument('-e', '--epochs', type=int, default=10, help='Number of epochs')
     parser.add_argument('-ds', '--dataset_type', type=str, default='Generated_2000', help='1. Generated_2000, 2. Caselist')
-    parser.add_argument('-s', '--sensor', type=str, default='foundation_origin xy FloaterOffset [m]', help='Sensor to be predicted')
+    parser.add_argument('-se', '--sensor', type=str, default='foundation_origin xy FloaterOffset [m]', help='Sensor to be predicted')
     parser.add_argument('-is', '--samples_per_step', type=int, default=100, help='Samples to be selected per step and initial samplesize')
     parser.add_argument('-vs', '--validation_size', type=int, default=0.1, help='Size of the validation set in percentage')
     parser.add_argument('-lr', '--learning_rate', type=str, default=0.01, help='Learning rate')
     parser.add_argument('-al', '--active_learning', type=bool, default=False, help='Use active learning')
     parser.add_argument('-dr', '--directory', type=str, default='_plots', help='Directory to save the ouputs')
     parser.add_argument('-tb', '--tensorboard', type=str, default='runs', help='Directory to save the TB logs')
-    parser.add_argument('-v', '--verbose', type=bool, default=True, help='Print the model')
+    parser.add_argument('-v', '--verbose', action='store_true', help='Print the model')
     args = parser.parse_args()
 
     model = RunModel(args.model, args.hidden_size, args.steps, args.epochs, args.dataset_type, args.sensor,
