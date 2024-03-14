@@ -5,3 +5,4 @@ _plots
 .vscode
 Models/to_implement.py
 Models/runs
+.DS_Store

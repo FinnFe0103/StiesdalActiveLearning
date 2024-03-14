@@ -20,7 +20,7 @@ class Dataprep:
             dataset_size = int(dataset_type.split('_')[1])
             self.x, self.y = self.generate_data(-10, 10, dataset_size)
 
-        self.x, self.y = self.normalize_data(self.x, self.y)
+        #self.x, self.y = self.normalize_data(self.x, self.y)
         self.known_data, self.pool_data = self.initial_sample(self.x, self.y, initial_samplesize)
 
     # Generate synthetic data
@@ -34,7 +34,7 @@ class Dataprep:
         indices = np.random.permutation(n)
         x, y = x[indices], y[indices]
         
-        return x, y
+        return x.astype(np.float32), y.astype(np.float32)
     
     # Load the caselist data from csvs (update later to read directly from the database)
     def load_caselist(self, sensor):
@@ -141,6 +141,6 @@ def load_data(numpy_array, batch_size = 16):
     targets = numpy_array[:, -1]    # Last column
     print('Features and targets shape:', features.shape, targets.shape)
 
-    torch_dataset = TensorDataset(torch.tensor(features), torch.tensor(targets))
+    torch_dataset = TensorDataset(torch.tensor(features), torch.tensor(targets).unsqueeze(1))
     torch_loader = DataLoader(torch_dataset, batch_size=batch_size, shuffle=True)
     return torch_loader

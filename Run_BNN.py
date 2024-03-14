@@ -41,7 +41,8 @@ class RunModel:
         self.model = self.init_model(input_dim, hidden_size) # Initialize the model
         self.criterion = torch.nn.MSELoss() # Loss function
         self.optimizer = self.init_optimizer(learning_rate) # Initialize the optimizer
-        self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+        self.device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
+        print(self.device)
 
     def init_model(self, input_dim, hidden_size):
         if self.model_name == 'BNN':
@@ -76,9 +77,9 @@ class RunModel:
                 x, y = x.to(self.device), y.to(self.device)
                 self.optimizer.zero_grad()
 
-                loss = self.model.sample_elbo(inputs=x.to(torch.float32), labels=y.to(torch.float32).unsqueeze(1), 
+                loss = self.model.sample_elbo(inputs=x, labels=y,
                                               criterion=self.criterion, sample_nbr=1,
-                                              complexity_cost_weight=0.01/len(train_loader.dataset))
+                                              complexity_cost_weight=0) #0.01/len(train_loader.dataset)
                 loss.backward()
                 self.optimizer.step()
                 total_train_loss += loss.item()
@@ -105,9 +106,9 @@ class RunModel:
             for x, y in val_loader:
                 x, y = x.to(self.device), y.to(self.device)
                 # Calculate loss using sample_elbo for Bayesian inference
-                loss = self.model.sample_elbo(inputs=x.to(torch.float32), labels=y.to(torch.float32).unsqueeze(1),
+                loss = self.model.sample_elbo(inputs=x, labels=y,
                                             criterion=self.criterion, sample_nbr=3,
-                                            complexity_cost_weight=0.01/len(val_loader.dataset))
+                                            complexity_cost_weight=0) #0.01/len(val_loader.dataset)
                 total_val_loss += loss.item()
 
         step_val_loss = total_val_loss / len(val_loader) # Average loss over batches
@@ -125,7 +126,7 @@ class RunModel:
         x_selected = self.known_data[:, :-1]
         y_selected = self.known_data[:, -1]
 
-        x_pool_torch = torch.tensor(x_pool, dtype=torch.float32) 
+        x_pool_torch = torch.tensor(x_pool) 
         preds = [self.model(x_pool_torch.to(self.device)) for _ in range(samples)]
         preds = torch.stack(preds)  # Shape: [samples, N, output_dim]
         means = preds.mean(dim=0).detach().cpu().numpy()  # calculate the mean of the predictions
