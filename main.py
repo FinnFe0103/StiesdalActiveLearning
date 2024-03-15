@@ -151,7 +151,7 @@ class RunModel:
         means = preds.mean(dim=0).detach().cpu().numpy()  # calculate the mean of the predictions
         stds = preds.std(dim=0).detach().cpu().numpy()  # calculate the standard deviation of the predictions
 
-        self.preds_csv(preds, 'prediction')
+        #self.preds_csv(preds, 'prediction')
 
         return means, stds  # Return both the mean and standard deviation of predictions
 
@@ -181,7 +181,7 @@ class RunModel:
         x_pool_selected = x_pool[selected_indices] # [observations, 1]
         y_pool_selected = y_pool[selected_indices] # [observations]
 
-        y_vals = [means, means + 200 * stds, means - 200 * stds] #list of 3 arrays of shape [observations in pool, 1] (use 2 for 95% CI)
+        y_vals = [means, means + 2 * stds, means - 2 * stds] #list of 3 arrays of shape [observations in pool, 1] (use 2 for 95% CI)
         df = pd.concat([pd.DataFrame({'x': x_pool.squeeze(), 'y': y_val.squeeze()}) for y_val in y_vals], ignore_index=True)
 
         # Plotting
@@ -253,14 +253,14 @@ if __name__ == '__main__':
     
     args = parser.parse_args()
 
-    outside = ['-h', '-ds', '-m', '-v', '-rn', '-dr', '-vs', '-se']
+    outside = ['-h', '-ds', '-m', '-v', '-rn', '-dr', '-vs', '-se'] 
     option_value_list = [(action.option_strings[0].lstrip('-'), getattr(args, action.dest)) 
                          for action in parser._actions if action.option_strings and action.option_strings[0] not in outside]
     run_name = args.run_name + '_' + '_'.join(f"{abbr}{str(value)}" for abbr, value in option_value_list)
     
     model = RunModel(args.model, args.hidden_size, args.layer_number, args.steps, args.epochs, args.dataset_type, args.sensor, args.scaling, args.samples_per_step, 
                      args.validation_size, args.learning_rate, args.active_learning, args.directory, args.verbose, run_name, args.complexity_weight, args.prior_sigma)
-
+    #-v -ln 3 -hs 4 -ps 0.0000001 -cw 0.01 -rn v1
     # Iterate through the steps of active learning
     for step in range(model.steps):
         start_step = time.time()

@@ -9,7 +9,7 @@ class BayesianNetwork(nn.Module):
         super().__init__()
         
         self.layers = nn.ModuleList()  # A list to hold all layers
-        self.layers.append(BayesianLinear(input_dim, hidden_size, prior_sigma_1=prior_sigma)) # Input layer
+        self.layers.append(BayesianLinear(input_dim, hidden_size, prior_sigma_1=prior_sigma)) # Input layer 
         
         for _ in range(1, layer_number - 1):  # Add hidden layers based on layer_number
             self.layers.append(BayesianLinear(hidden_size, hidden_size, prior_sigma_1=prior_sigma))
