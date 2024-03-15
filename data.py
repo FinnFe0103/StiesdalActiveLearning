@@ -5,30 +5,27 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from sklearn.cluster import KMeans
 from sklearn.decomposition import PCA
-from sklearn.preprocessing import MinMaxScaler
+from sklearn.preprocessing import MinMaxScaler, StandardScaler
 from torch.utils.data import TensorDataset, DataLoader
 import torch
 
-
 class Dataprep:
     # Upon initialization, load the data, normalize it, and select the initial samples
-    def __init__(self, dataset_type, sensor, initial_samplesize):
-
+    def __init__(self, dataset_type, sensor, scaling, initial_samplesize):
         if dataset_type == 'Caselist':
             self.x, self.y, self.groups = self.load_caselist(sensor)
         elif dataset_type.split('_')[0] == 'Generated':
             dataset_size = int(dataset_type.split('_')[1])
             self.x, self.y = self.generate_data(-10, 10, dataset_size)
 
-        #self.x, self.y = self.normalize_data(self.x, self.y)
+        self.x, self.y = self.normalize_data(self.x, self.y, scaling)
         self.known_data, self.pool_data = self.initial_sample(self.x, self.y, initial_samplesize)
 
-    # Generate synthetic data
-    def generate_data(self, start, end, n):
+    def generate_data(self, start, end, n): # Generate synthetic data
         x = np.linspace(start, end, n)
         sample_mean = [math.sin(i/2) for i in x]
         sample_var = [((abs(start)+abs(end))/2 - abs(i))/16 for i in x]
-        y = stats.norm(sample_mean, sample_var).rvs()
+        y = stats.norm(sample_mean, sample_var).rvs()+10
 
         # Shuffle the x and y values
         indices = np.random.permutation(n)
@@ -36,8 +33,7 @@ class Dataprep:
         
         return x.astype(np.float32), y.astype(np.float32)
     
-    # Load the caselist data from csvs (update later to read directly from the database)
-    def load_caselist(self, sensor):
+    def load_caselist(self, sensor): # Load the caselist data from csvs (update later to read directly from the database)
         x = pd.read_csv('_data/caselist.csv')
         y = pd.read_csv('_data/sim_results.csv')
 
@@ -45,12 +41,20 @@ class Dataprep:
         x = np.array(x.iloc[:, 1:-1])
         y = np.array(y[sensor])
     
-        return x, y, groups
+        return x.astype(np.float32), y.astype(np.float32), groups
     
-    # Normalize the data using MinMaxScaler
-    def normalize_data(self, x, y):
-        scaler_x = MinMaxScaler() # Initialize the scaler for x
-        scaler_y = MinMaxScaler() # Initialize the scaler for y
+    def normalize_data(self, x, y, scaling): # Normalize the data using StandardScaler/MinMaxScaler/none
+        # Initialize the scaler for x and y
+        if scaling == 'Standard':
+            scaler_x = StandardScaler()
+            scaler_y = StandardScaler()
+        elif scaling == 'Minmax':
+            scaler_x = MinMaxScaler() 
+            scaler_y = MinMaxScaler()
+        elif scaling == 'None':
+            return x, y
+        else:
+            raise ValueError('Invalid scaler type')
         
         # Reshape y to have a 2D shape if it's 1D
         if y.ndim == 1:
@@ -69,33 +73,8 @@ class Dataprep:
         
         return x_normalized, y_normalized
 
-    # Select the initial samples using K-Medoids clustering (probably needs to be updated using another method)
-    def initial_sample(self, x, y, initial_samplesize):
+    def initial_sample(self, x, y, initial_samplesize): # Select the initial samples using K-Medoids clustering (probably needs to be updated using another method)
 
-        # # Apply k-means clustering
-        # if x.ndim == 1:
-        #     kmeans = KMeans(n_clusters=min(initial_samplesize, len(x)), random_state=0).fit(x.reshape(-1, 1))
-        # else:   
-        #     kmeans = KMeans(n_clusters=min(initial_samplesize, len(x)), random_state=0).fit(x)
-        # centroids = kmeans.cluster_centers_
-
-        # print(centroids)
-
-        # # Find the closest data points to the centroids of the clusters
-        # indices = []
-        # for center in centroids:
-        #     distances = np.abs(x - center)
-        #     index = np.argmin(distances)
-        #     if index not in indices:
-        #         indices.append(index)
-        # if len(indices) < initial_samplesize: # if the distance to centroids returns the same datapoints, add 'needed' random indices
-        #     extra_indices = [i for i in range(len(x)) if i not in indices]
-        #     needed = initial_samplesize - len(indices)
-        #     indices.extend(extra_indices[:needed])
-
-        # print(indices)
-        # print(max(indices))
-        
         indices = np.random.choice(len(x), initial_samplesize, replace=False)
 
         x_selected = x[indices]
@@ -128,18 +107,10 @@ class Dataprep:
         pool_data = np.column_stack((x_pool, y_pool))
 
         return known_data, pool_data
-    
-# Based on the indices passed, transfer the data from pool to known
-def update_data(k_d, p_d, indices):
-    k_d_new = np.append(k_d, p_d[indices], axis=0)
-    p_d_new = np.delete(p_d, indices, axis=0)
-    return k_d_new, p_d_new
 
-# Split the features and target and load the data into a torch DataLoader
-def load_data(numpy_array, batch_size = 16):
+def load_data(numpy_array, batch_size = 16): # Split the features and target and load the data into a torch DataLoader
     features = numpy_array[:, :-1]#.squeeze()  # All but the last column
     targets = numpy_array[:, -1]    # Last column
-    print('Features and targets shape:', features.shape, targets.shape)
 
     torch_dataset = TensorDataset(torch.tensor(features), torch.tensor(targets).unsqueeze(1))
     torch_loader = DataLoader(torch_dataset, batch_size=batch_size, shuffle=True)
