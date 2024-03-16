@@ -17,6 +17,8 @@ from sklearn.model_selection import train_test_split
 from sklearn.decomposition import PCA
 from torch.utils.tensorboard import SummaryWriter
 import gpytorch
+from gpytorch.mlls import ExactMarginalLogLikelihood
+from sklearn.preprocessing import MinMaxScaler
 
 class RunModel:
     def __init__(self, model_name, hidden_size, layer_number, steps, epochs, dataset_type, sensor, scaling, samples_per_step, # 0. Initialize all parameters and dataset
@@ -26,8 +28,8 @@ class RunModel:
         self.run_name = run_name # Name of the run
         self.verbose = verbose # Print outputs
         os.makedirs(directory, exist_ok=True) # Directory to save the outputs
-        #current_time = datetime.datetime.now().strftime("%m_%d-%H_%M_%S") # Unique directory based on datetime for each run
-        log_dir = os.path.join('Models/runs', model_name, run_name) # + '_' + current_time
+        current_time = datetime.datetime.now().strftime("%m_%d-%H_%M_%S") # Unique directory based on datetime for each run
+        log_dir = os.path.join('Models/runs', model_name, run_name) + '_' + current_time
         self.writer = SummaryWriter(log_dir) # TensorBoard
         print('Run saved under:', log_dir)
 
@@ -80,41 +82,48 @@ class RunModel:
         # Split the pool data into train and validation sets
         if self.validation_size > 0:
             train, val = train_test_split(self.known_data, test_size=self.validation_size)
-            train_loader = load_data(train)
-            val_loader = load_data(val)
+            if self.model_name == 'GP':
+                train_loader = train
+                val_loader = val
+            else:
+                train_loader = load_data(train)
+                val_loader = load_data(val)
         elif self.validation_size == 0:
-            train_loader = load_data(self.known_data)
+            if self.model_name == 'GP':
+                train_loader = self.known_data
+            else:
+                train_loader = load_data(self.known_data)
         else:
             raise ValueError('Invalid validation size')
 
         if self.model_name == 'GP':
-            # GP-specific training process
-            X_train = []
-            y_train = []
+            # GP Training process
+            #scaler = MinMaxScaler()
+            #X_train = torch.tensor(scaler.fit_transform(train_loader[:, 0].reshape(-1, 1))).to(self.device)  # Adds an extra dimension to make X_train a 2D tensor
+            #y_train = torch.tensor(train_loader[:, 1]).to(self.device)
 
-            # Collect all batches
-            X_train = torch.cat([x_batch.to(self.device) for x_batch, _ in train_loader])
-            y_train = torch.cat([y_batch.to(self.device) for _, y_batch in train_loader])
-            y_train = y_train.squeeze(-1)
+            X_train = torch.tensor(train_loader[:, 0]).to(self.device)
+            y_train = torch.tensor(train_loader[:, 1]).to(self.device)
             
             # Initialize likelihood and model with training data
             self.likelihood = gpytorch.likelihoods.GaussianLikelihood().to(self.device)
             self.likelihood.noise = 0.01
             self.model = ExactGPModel(X_train, y_train, self.likelihood).to(self.device)
+            self.optimizer = self.init_optimizer(self.learning_rate)
+
             self.model.train()
             self.likelihood.train()
-            self.optimizer = self.init_optimizer(self.learning_rate)
             self.mll = gpytorch.mlls.ExactMarginalLogLikelihood(self.likelihood, self.model)
 
             for epoch in range(self.epochs):
+                start_epoch = time.time()
                 self.optimizer.zero_grad()
                 output = self.model(X_train)
                 loss = -self.mll(output, y_train) 
                 loss.backward()
-                self.optimizer.step()
                 if self.verbose:
-                    print(f'Epoch {epoch + 1}/{self.epochs} - Loss: {loss.item()}')
-
+                    print(f'Step: {step+1} | Epoch: {epoch+1} of {self.epochs} | Train-Loss: {loss:.4f} | Lengthscale: {self.model.covar_module.base_kernel.lengthscale.item():.3f} | Noise: {self.likelihood.noise.item():.3f} | {time.time() - start_epoch:.2f} seconds')
+                self.optimizer.step()
             if self.validation_size > 0:
                 # Evaluation step here, assuming evaluate_model method exists
                 self.evaluate_val_data(val_loader, step)
@@ -143,7 +152,7 @@ class RunModel:
                     print(f'Step: {step+1} | Epoch: {epoch+1} of {self.epochs} | Train-Loss: {epoch_train_loss:.4f} | {time.time() - start_epoch:.2f} seconds')
 
             if self.validation_size > 0:
-                self.evaluate_val_data(val_loader, step)  # Evaluate on the validation set
+                self.evaluate_val_data(val, val_loader, step)  # Evaluate on the validation set
 
     def evaluate_val_data(self, val_loader, step):
          # 1.1 Evaluate the model on the validation set
@@ -152,11 +161,9 @@ class RunModel:
             self.model.eval()
             self.likelihood.eval()
 
-            X_val = torch.cat([x_batch.to(self.device) for x_batch, _ in val_loader])
-            y_val = torch.cat([y_batch.to(self.device) for _, y_batch in val_loader])
-
-            y_val = y_val.squeeze(-1)
-
+            X_val = torch.tensor(val_loader[:, 0]).to(self.device)
+            y_val = torch.tensor(val_loader[:, 1]).to(self.device)
+            
             total_val_loss = 0
             with torch.no_grad(), gpytorch.settings.fast_pred_var():
                 output = self.model(X_val)
@@ -221,11 +228,12 @@ class RunModel:
         
         with torch.no_grad():
             if self.model_name == 'GP':
-                self.likelihood.eval()  # Also set the likelihood to evaluation mode for GP predictions
-                preds = self.model(x_pool_torch)
-                observed_pred = self.likelihood(preds)
-                means = observed_pred.mean.detach().cpu().numpy()
-                stds = observed_pred.stddev.detach().cpu().numpy()
+                with torch.no_grad(), gpytorch.settings.fast_pred_var():
+                    self.likelihood.eval()  # Also set the likelihood to evaluation mode for GP predictions
+                    preds = self.model(x_pool_torch)
+                    observed_pred = self.likelihood(preds)
+                    means = observed_pred.mean.numpy()
+                    stds = observed_pred.stddev.numpy()
             else:
                 # Assuming self.model(x) returns a distribution from which you can sample for non-GP models
                 preds = [self.model(x_pool_torch) for _ in range(500)]
@@ -316,14 +324,14 @@ if __name__ == '__main__':
     # Active learning parameters
     parser.add_argument('-al', '--active_learning', action='store_true', help='Use active learning (AL) or random sampling (RS)')
     parser.add_argument('-s', '--steps', type=int, default=10, help='Number of steps')
-    parser.add_argument('-e', '--epochs', type=int, default=100, help='Number of epochs')
-    parser.add_argument('-ss', '--samples_per_step', type=int, default=20, help='Samples to be selected per step and initial samplesize')
-    parser.add_argument('-vs', '--validation_size', type=float, default=3, help='Size of the validation set in percentage')
+    parser.add_argument('-e', '--epochs', type=int, default=150, help='Number of epochs')
+    parser.add_argument('-ss', '--samples_per_step', type=int, default=100, help='Samples to be selected per step and initial samplesize')
+    parser.add_argument('-vs', '--validation_size', type=float, default=20, help='Size of the validation set in percentage')
     
     # Output parameters    
     parser.add_argument('-dr', '--directory', type=str, default='_plots', help='Directory to save the ouputs')
     parser.add_argument('-v', '--verbose', action='store_true', help='Print the model')
-    parser.add_argument('-rn', '--run_name', type=str, default='', help='Run name prefix')
+    parser.add_argument('-rn', '--run_name', type=str, default='hello', help='Run name prefix')
     
     args = parser.parse_args()
 
@@ -347,3 +355,8 @@ if __name__ == '__main__':
 
         print(f'Updated pool and known data (AL = {args.active_learning}):', model.pool_data.shape, model.known_data.shape)
         print('Step: {} of {} | {:.2f} seconds'.format(step+1, model.steps, time.time() - start_step))
+
+
+
+
+    

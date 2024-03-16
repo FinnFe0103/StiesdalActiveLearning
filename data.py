@@ -64,7 +64,7 @@ class Dataprep:
         
         x_normalized = scaler_x.fit_transform(x) # Fit and transform the input features
         y_normalized = scaler_y.fit_transform(y) # Fit and transform the target variable
-        y_normalized = y
+        #y_normalized = y
         # If y was originally 1D, convert it back
         if y_normalized.shape[1] == 1:
             y_normalized = y_normalized.ravel()
