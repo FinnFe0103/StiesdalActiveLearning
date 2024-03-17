@@ -23,9 +23,9 @@ class RunModel:
         # Configs
         self.run_name = run_name # Name of the run
         self.verbose = verbose # Print outputs
-        os.makedirs(directory, exist_ok=True) # Directory to save the outputs
+        os.makedirs('_plots', exist_ok=True) # Directory to save the outputs
         #current_time = datetime.datetime.now().strftime("%m_%d-%H_%M_%S") # Unique directory based on datetime for each run
-        log_dir = os.path.join('Models/runs', model_name, run_name) # + '_' + current_time
+        log_dir = os.path.join('Models/runs', model_name, directory, run_name) # + '_' + current_time
         self.writer = SummaryWriter(log_dir) # TensorBoard
         print('Run saved under:', log_dir)
 
@@ -165,7 +165,7 @@ class RunModel:
             selected_indices = random.sample(range(len(self.pool_data)), samples_per_step)
             return selected_indices
             
-    def plot(self, means, stds, selected_indices, step): #4.1 Plot the predictions and selected indices
+    def plot(self, means, stds, selected_indices, step, x_highest, y_highest): #4.1 Plot the predictions and selected indices
         x_pool = self.pool_data[:, :-1] # [observations, features]
         y_pool = self.pool_data[:, -1] # [observations]
         x_selected = self.known_data[:, :-1] # [observations, features]
@@ -190,6 +190,7 @@ class RunModel:
         plt.scatter(x_pool, y_pool, c="green", marker="*", alpha=0.1)  # Plot the data pairs in the pool
         plt.scatter(x_selected, y_selected, c="red", marker="*", alpha=0.2)  # plot the train data on top
         plt.scatter(x_pool_selected, y_pool_selected, c="blue", marker="o", alpha=0.3)  # Highlight selected data points
+        plt.scatter(x_highest, y_highest, c="purple", marker="o", alpha=0.3)
         plt.title(self.run_name.replace("_", " ") + f' | Step {step + 1}', fontsize='small')
         plt.xlabel('1 Principal Component' if pca_applied else 'x')
         plt.legend(['Mean prediction', 'Confidence Interval', 'Pool data (unseen)', 'Seen data', 'Selected data'], fontsize='small')
@@ -223,8 +224,35 @@ class RunModel:
         preds = pd.DataFrame(preds)
         preds.to_csv(f'{name}_preds_{self.run_name}.csv', index=False)
 
+    def final_prediction(self, step, topk=5, samples=500):
+        self.model.eval()
+        x_total = np.concatenate((self.pool_data[:, :-1], self.known_data[:, :-1]), axis=0)
+        y_total = np.concatenate((self.pool_data[:, -1], self.known_data[:, -1]), axis=0)
+        
+        x_total_torch = torch.tensor(x_total).to(self.device)
+        with torch.no_grad():
+            preds = [self.model(x_total_torch) for _ in range(samples)]
+        preds = torch.stack(preds)
+        means = preds.mean(dim=0).detach().cpu().numpy().squeeze()
+        highest_indices = np.argsort(means)[-topk:]
+
+        x_highest = x_total[highest_indices]
+        y_highest = y_total[highest_indices]
+
+        # fig = plt.figure()
+        # plt.scatter(self.pool_data[:, :-1], self.pool_data[:, -1], c="green", marker="*", alpha=0.1)  # Plot the data pairs in the pool
+        # plt.scatter(self.known_data[:, :-1], self.known_data[:, -1], c="red", marker="*", alpha=0.2)  # plot the train data on top
+        # plt.scatter(x_highest, y_highest, c="blue", marker="o", alpha=0.3)  # Highlight selected data points
+        # plt.title(self.run_name.replace("_", " ") + f' | Step {step + 1}', fontsize='small')
+        # plt.legend(['Pool Data', 'Known Data', '100 Highest Preds'], fontsize='small')
+        # #plt.close(fig)
+        # plt.show()
+        return x_highest, y_highest
+    
+
 
 if __name__ == '__main__':
+
     parser = argparse.ArgumentParser(description='Run the BNN model')
     # Dataset parameters
     parser.add_argument('-ds', '--dataset_type', type=str, default='Generated_2000', help='1. Generated_2000, 2. Caselist')
@@ -233,10 +261,10 @@ if __name__ == '__main__':
     
     # Model parameters
     parser.add_argument('-m', '--model', type=str, default='BNN', help='1. BNN, 2. MC Dropout, 3. Deep Ensembles')
-    parser.add_argument('-hs', '--hidden_size', type=int, default=10, help='Number of hidden units')
-    parser.add_argument('-ln', '--layer_number', type=int, default=10, help='Number of layers')
-    parser.add_argument('-ps', '--prior_sigma', type=float, default=0.1, help='Prior sigma')
-    parser.add_argument('-cw', '--complexity_weight', type=float, default=0.1, help='Complexity weight')
+    parser.add_argument('-hs', '--hidden_size', type=int, default=4, help='Number of hidden units')
+    parser.add_argument('-ln', '--layer_number', type=int, default=3, help='Number of layers')
+    parser.add_argument('-ps', '--prior_sigma', type=float, default=0.0000001, help='Prior sigma')
+    parser.add_argument('-cw', '--complexity_weight', type=float, default=0.01, help='Complexity weight')
     parser.add_argument('-lr', '--learning_rate', type=float, default=0.01, help='Learning rate')
     
     # Active learning parameters
@@ -247,28 +275,28 @@ if __name__ == '__main__':
     parser.add_argument('-vs', '--validation_size', type=float, default=0, help='Size of the validation set in percentage')
     
     # Output parameters    
-    parser.add_argument('-dr', '--directory', type=str, default='_plots', help='Directory to save the ouputs')
+    parser.add_argument('-dr', '--directory', type=str, default='_plots', help='Sub-directory to save the ouputs')
     parser.add_argument('-v', '--verbose', action='store_true', help='Print the model')
-    parser.add_argument('-rn', '--run_name', type=str, default='', help='Run name prefix')
     
     args = parser.parse_args()
 
     outside = ['-h', '-ds', '-m', '-v', '-rn', '-dr', '-vs', '-se'] 
     option_value_list = [(action.option_strings[0].lstrip('-'), getattr(args, action.dest)) 
                          for action in parser._actions if action.option_strings and action.option_strings[0] not in outside]
-    run_name = args.run_name + '_' + '_'.join(f"{abbr}{str(value)}" for abbr, value in option_value_list)
+    run_name = '_'.join(f"{abbr}{str(value)}" for abbr, value in option_value_list)
     
     model = RunModel(args.model, args.hidden_size, args.layer_number, args.steps, args.epochs, args.dataset_type, args.sensor, args.scaling, args.samples_per_step, 
                      args.validation_size, args.learning_rate, args.active_learning, args.directory, args.verbose, run_name, args.complexity_weight, args.prior_sigma)
-    #-v -ln 3 -hs 4 -ps 0.0000001 -cw 0.01 -rn v1
+    #-v -ln 3 -hs 4 -ps 0.0000001 -cw 0.01 -dr v1
     # Iterate through the steps of active learning
     for step in range(model.steps):
         start_step = time.time()
         model.train_model(step) # Train the model
+        x_highest, y_highest = model.final_prediction(step)
         model.evaluate_pool_data(step) # Evaluate the model on the pool data
         means, stds = model.predict() # Predict the uncertainty on the pool data
         selected_indices = model.acquisition_function(means, stds, args.samples_per_step, step) # Select the next samples from the pool
-        model.plot(means, stds, selected_indices, step) # Plot the predictions and selected indices
+        model.plot(means, stds, selected_indices, step, x_highest, y_highest) # Plot the predictions and selected indices
         model.update_data(selected_indices) # Update the known and pool data
 
         print(f'Updated pool and known data (AL = {args.active_learning}):', model.pool_data.shape, model.known_data.shape)
