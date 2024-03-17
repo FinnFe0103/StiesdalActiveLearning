@@ -16,6 +16,11 @@ from sklearn.model_selection import train_test_split
 from sklearn.decomposition import PCA
 from torch.utils.tensorboard import SummaryWriter
 
+# GP-specific imports
+from Models.ExactGP import ExactGPModel
+import gpytorch
+
+
 class RunModel:
     def __init__(self, model_name, hidden_size, layer_number, steps, epochs, dataset_type, sensor, scaling, samples_per_step, # 0. Initialize all parameters and dataset
                  validation_size, learning_rate, active_learning, directory, verbose, run_name, complexity_weight, prior_sigma):
@@ -44,85 +49,151 @@ class RunModel:
         self.model = self.init_model(self.known_data.shape[1]-1, hidden_size, layer_number, prior_sigma) # Initialize the model
         self.criterion = torch.nn.MSELoss() # Loss function
         self.optimizer = self.init_optimizer(learning_rate) # Initialize the optimizer
-        self.device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
+        self.device = torch.device("mps" if torch.backends.mps.is_available() and self.model_name != "GP" else "cpu")
         print(f'Using {self.device} for training')
         self.complexity_weight = complexity_weight # Complexity weight for ELBO
+
+        # GP-specific parameters
+        if self.model_name == 'GP':
+            self.likelihood = None
+            self.mll = None
+        self.learning_rate = learning_rate # Learning rate for the optimizer
 
     def init_model(self, input_dim, hidden_size, layer_number, prior_sigma): # 0.1 Initialize the model
         if self.model_name == 'BNN':
             model = BayesianNetwork(input_dim, hidden_size, layer_number, prior_sigma)
-        # elif self.model_name == 'MC Dropout':
-        #     model = MCDropout(hidden_size)
-        # elif self.model_name == 'Deep Ensembles':
-        #     model = DeepEnsembles(hidden_size)
-        else:
-            raise ValueError('Invalid model type')
-        return model
+        elif self.model_name == 'GP':
+            model = None #model needs to be initialized with the data
+        self.device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
+        print(f'Using {self.device} for training')
+        self.complexity_weight = complexity_weight # Complexity weight for ELBO
     
-    def init_optimizer(self, learning_rate): # 0.2 Initialize the optimizer
-        optimizer = Adam(self.model.parameters(), lr=learning_rate)
-        return optimizer
+    def init_optimizer(self, learning_rate):
+        if self.model == None: # GP model needs to initialize with the data, then optimizer can be initialized
+            return None 
+        else:
+            optimizer = Adam(self.model.parameters(), lr=learning_rate)
     
     def train_model(self, step): # 1. Train the model
         # Split the pool data into train and validation sets
         if self.validation_size > 0:
             train, val = train_test_split(self.known_data, test_size=self.validation_size)
-            train_loader = load_data(train)
-            val_loader = load_data(val)
+
+            if self.model_name == 'GP':
+                # no train and val loader needed for GP, since not operating in batches
+                train_loader = train
+                val_loader = val
+            else:
+                train_loader = load_data(train)
+                val_loader = load_data(val)
         elif self.validation_size == 0:
-            train_loader = load_data(self.known_data)
+            if self.model_name == 'GP':
+                # no train and val loader needed for GP, since not operating in batches
+                train_loader = self.known_data
+            else:
+                train_loader = load_data(self.known_data)
         else:
             raise ValueError('Invalid validation size')
 
-        self.model.to(self.device) # move the model to the configured device
+        if self.model_name == 'GP':
+            # GP Training process
+            X_train = torch.tensor(train_loader[:, :-1]).to(self.device)
+            y_train = torch.tensor(train_loader[:, -1]).to(self.device)
+            
+            # Initialize likelihood and model with training data
+            self.likelihood = gpytorch.likelihoods.GaussianLikelihood().to(self.device)
+            self.likelihood.noise = 0.01 #hyperparameter
+            self.model = ExactGPModel(X_train, y_train, self.likelihood).to(self.device)
+            self.optimizer = self.init_optimizer(self.learning_rate)
 
-        for epoch in range(self.epochs):
-            start_epoch = time.time()
             self.model.train()
-            total_train_loss = 0
-            for x, y in train_loader:
-                x, y = x.to(self.device), y.to(self.device)
+            self.likelihood.train()
+            self.mll = gpytorch.mlls.ExactMarginalLogLikelihood(self.likelihood, self.model)
+
+            for epoch in range(self.epochs):
+                start_epoch = time.time()
                 self.optimizer.zero_grad()
-
-                loss = self.model.sample_elbo(inputs=x, labels=y,
-                                              criterion=self.criterion, sample_nbr=1,
-                                              complexity_cost_weight=self.complexity_weight) #0.01/len(train_loader.dataset)
+                output = self.model(X_train)
+                loss = -self.mll(output, y_train) 
                 loss.backward()
+                if self.verbose:
+                    print(f'Step: {step+1} | Epoch: {epoch+1} of {self.epochs} | Train-Loss: {loss:.4f} | Lengthscale: {self.model.covar_module.base_kernel.lengthscale.item():.3f} | Noise: {self.likelihood.noise.item():.3f} | {time.time() - start_epoch:.2f} seconds')
                 self.optimizer.step()
-                total_train_loss += loss.item()
+            if self.validation_size > 0:
+                # Evaluation step here, assuming evaluate_model method exists
+                self.evaluate_val_data(val_loader, step)
 
-            # Log model parameters
-            for name, param in self.model.named_parameters():
-                self.writer.add_histogram(f'{name}', param, epoch)
-                if param.grad is not None:
-                    self.writer.add_histogram(f'{name}.grad', param.grad, epoch)
+        else:
+            # BNN Training
+            self.model.to(self.device) # move the model to the configured device
 
-            # Average loss for the current epoch
-            epoch_train_loss = total_train_loss / len(train_loader) # Average loss over batches
-            self.writer.add_scalar('loss/train', epoch_train_loss, step*self.epochs+epoch+1)
-            if self.verbose:
-                print('Step: {} | Epoch: {} of {} | Train-Loss: {:.4f} | {:.2f} seconds'.format(step+1, epoch+1, self.epochs, epoch_train_loss, time.time() - start_epoch))
+            for epoch in range(self.epochs):
+                start_epoch = time.time()
+                self.model.train()
+                total_train_loss = 0
+                for x, y in train_loader:
+                    x, y = x.to(self.device), y.to(self.device)
+                    self.optimizer.zero_grad()
 
-        if self.validation_size > 0:
-            self.evaluate_val_data(val_loader, step) # Evaluate the model on the validation set
+                    loss = self.model.sample_elbo(inputs=x, labels=y,
+                                                criterion=self.criterion, sample_nbr=1,
+                                                complexity_cost_weight=self.complexity_weight) #0.01/len(train_loader.dataset)
+                    loss.backward()
+                    self.optimizer.step()
+                    total_train_loss += loss.item()
+
+                # Log model parameters
+                for name, param in self.model.named_parameters():
+                    self.writer.add_histogram(f'{name}', param, epoch)
+                    if param.grad is not None:
+                        self.writer.add_histogram(f'{name}.grad', param.grad, epoch)
+
+                # Average loss for the current epoch
+                epoch_train_loss = total_train_loss / len(train_loader) # Average loss over batches
+                self.writer.add_scalar('loss/train', epoch_train_loss, step*self.epochs+epoch+1)
+                if self.verbose:
+                    print('Step: {} | Epoch: {} of {} | Train-Loss: {:.4f} | {:.2f} seconds'.format(step+1, epoch+1, self.epochs, epoch_train_loss, time.time() - start_epoch))
+
+            if self.validation_size > 0:
+                self.evaluate_val_data(val_loader, step) # Evaluate the model on the validation set
 
     def evaluate_val_data(self, val_loader, step): # 1.1 Evaluate the model on the validation set
-        self.model.eval()  # Set the model to evaluation mode
-        total_val_loss = 0
+        if self.model_name == 'GP':
+            # GP-specific evaluation process
+            self.model.eval()
+            self.likelihood.eval()
 
-        with torch.no_grad():  # Inference mode, gradients not required
-            for x, y in val_loader:
-                x, y = x.to(self.device), y.to(self.device)
-                # Calculate loss using sample_elbo for Bayesian inference
-                loss = self.model.sample_elbo(inputs=x, labels=y,
-                                            criterion=self.criterion, sample_nbr=3,
-                                            complexity_cost_weight=self.complexity_weight)
+            X_val = torch.tensor(val_loader[:, :-1]).to(self.device)
+            y_val = torch.tensor(val_loader[:, -1]).to(self.device)
+            
+            total_val_loss = 0
+            with torch.no_grad(), gpytorch.settings.fast_pred_var():
+                output = self.model(X_val)
+                loss = -self.mll(output, y_val)
                 total_val_loss += loss.item()
 
-        step_val_loss = total_val_loss / len(val_loader) # Average loss over batches
-        self.writer.add_scalar('loss/val', step_val_loss, step+1)
-        if self.verbose:
-            print('Step: {} | Val-Loss: {:.4f}'.format(step+1, step_val_loss))
+            step_val_loss = total_val_loss  # There is only one "batch" for GP validation
+            self.writer.add_scalar('loss/val', step_val_loss, step+1)
+            if self.verbose:
+                print(f'Step: {step+1}, Val-Loss: {step_val_loss:.4f}')
+        
+        else:
+            self.model.eval()  # Set the model to evaluation mode
+            total_val_loss = 0
+
+            with torch.no_grad():  # Inference mode, gradients not required
+                for x, y in val_loader:
+                    x, y = x.to(self.device), y.to(self.device)
+                    # Calculate loss using sample_elbo for Bayesian inference
+                    loss = self.model.sample_elbo(inputs=x, labels=y,
+                                                criterion=self.criterion, sample_nbr=3,
+                                                complexity_cost_weight=self.complexity_weight)
+                    total_val_loss += loss.item()
+
+            step_val_loss = total_val_loss / len(val_loader) # Average loss over batches
+            self.writer.add_scalar('loss/val', step_val_loss, step+1)
+            if self.verbose:
+                print('Step: {} | Val-Loss: {:.4f}'.format(step+1, step_val_loss))
         
     def evaluate_pool_data(self, step): # 2. Evaluate the model on the pool data
         # Convert pool data to PyTorch tensors and move them to the correct device
@@ -131,8 +202,18 @@ class RunModel:
 
         self.model.eval()  # Set the model to evaluation mode
         with torch.no_grad():  # No need to calculate gradients
-            predictions = self.model(x_pool_torch)
-            loss = self.criterion(predictions, y_pool_torch)  # Calculate the loss
+            if self.model_name == 'GP':
+                # For GP, the model's output is a distribution, from which we can get the mean as predictions
+                self.likelihood.eval()  # Also set the likelihood to evaluation mode
+                prediction = self.model(x_pool_torch.unsqueeze(0))  # Add unsqueeze to match expected dimensions
+                predictions = self.likelihood(prediction)  # Get the predictive posterior
+                
+                # Compute MSE Loss for GP
+                loss = self.criterion(predictions.mean.reshape(-1, 1), y_pool_torch) 
+
+            else:
+                predictions = self.model(x_pool_torch)
+                loss = self.criterion(predictions, y_pool_torch)   # Calculate the loss
             
         # Log the loss to TensorBoard
         self.writer.add_scalar('loss/pool', loss.item(), step + 1)
@@ -146,10 +227,19 @@ class RunModel:
         x_pool = self.pool_data[:, :-1]
         x_pool_torch = torch.tensor(x_pool).to(self.device)
         with torch.no_grad():
-            preds = [self.model(x_pool_torch) for _ in range(samples)]
-        preds = torch.stack(preds)  # Shape: [samples, N, output_dim]
-        means = preds.mean(dim=0).detach().cpu().numpy()  # calculate the mean of the predictions
-        stds = preds.std(dim=0).detach().cpu().numpy()  # calculate the standard deviation of the predictions
+          
+            if self.model_name == 'GP':
+                with torch.no_grad(), gpytorch.settings.fast_pred_var():
+                    self.likelihood.eval()  # Also set the likelihood to evaluation mode for GP predictions
+                    preds = self.model(x_pool_torch)
+                    observed_pred = self.likelihood(preds)
+                    means = observed_pred.mean.numpy()
+                    stds = observed_pred.stddev.numpy()
+            else:
+                preds = [self.model(x_pool_torch) for _ in range(samples)]
+                preds = torch.stack(preds)  # Shape: [samples, N, output_dim]
+                means = preds.mean(dim=0).detach().cpu().numpy()  # calculate the mean of the predictions
+                stds = preds.std(dim=0).detach().cpu().numpy()  # calculate the standard deviation of the predictions
 
         #self.preds_csv(preds, 'prediction')
 
@@ -231,10 +321,18 @@ class RunModel:
         
         x_total_torch = torch.tensor(x_total).to(self.device)
         with torch.no_grad():
-            preds = [self.model(x_total_torch) for _ in range(samples)]
-        preds = torch.stack(preds)
-        means = preds.mean(dim=0).detach().cpu().numpy().squeeze()
-        highest_indices = np.argsort(means)[-topk:]
+            if self.model_name == 'GP':
+                with torch.no_grad(), gpytorch.settings.fast_pred_var():
+                    self.likelihood.eval()  # Also set the likelihood to evaluation mode for GP predictions
+                    preds = self.model(x_total_torch)
+                    observed_pred = self.likelihood(preds)
+                    means = observed_pred.mean.numpy()
+                    highest_indices = np.argsort(means)[-topk:]
+            else:
+                preds = [self.model(x_total_torch) for _ in range(samples)]
+                preds = torch.stack(preds)
+                means = preds.mean(dim=0).detach().cpu().numpy().squeeze()
+                highest_indices = np.argsort(means)[-topk:]
 
         x_highest = x_total[highest_indices]
         y_highest = y_total[highest_indices]
@@ -287,7 +385,9 @@ if __name__ == '__main__':
     
     model = RunModel(args.model, args.hidden_size, args.layer_number, args.steps, args.epochs, args.dataset_type, args.sensor, args.scaling, args.samples_per_step, 
                      args.validation_size, args.learning_rate, args.active_learning, args.directory, args.verbose, run_name, args.complexity_weight, args.prior_sigma)
-    #-v -ln 3 -hs 4 -ps 0.0000001 -cw 0.01 -dr v1
+    # BNN: -v -ln 3 -hs 4 -ps 0.0000001 -cw 0.01 -dr v1
+    # GP Demo: -v -m GP -sc Minmax -lr 0.1 -al -s 10 -e 10 -ss 25 -vs 0.2 
+
     # Iterate through the steps of active learning
     for step in range(model.steps):
         start_step = time.time()
