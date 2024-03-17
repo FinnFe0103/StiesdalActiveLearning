@@ -9,7 +9,7 @@ class ExactGPModel(gpytorch.models.ExactGP):
             # Assuming you have an RBFKernel instance named `rbf_kernel`:
             rbf_kernel = gpytorch.kernels.RBFKernel()
             # To set an initial length scale:
-            rbf_kernel.lengthscale = 0.1 # Evtl. Hyperparameter
+            rbf_kernel.lengthscale = 0.1 #Hyperparameter
             self.covar_module = gpytorch.kernels.ScaleKernel(rbf_kernel)  #45
         
     def forward(self, x):
