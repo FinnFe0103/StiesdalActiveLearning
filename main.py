@@ -20,6 +20,7 @@ from torch.utils.tensorboard import SummaryWriter
 from Models.ExactGP import ExactGPModel
 import gpytorch
 
+
 class RunModel:
     def __init__(self, model_name, hidden_size, layer_number, steps, epochs, dataset_type, sensor, scaling, samples_per_step, # 0. Initialize all parameters and dataset
                  validation_size, learning_rate, active_learning, directory, verbose, run_name, complexity_weight, prior_sigma):
@@ -63,24 +64,21 @@ class RunModel:
             model = BayesianNetwork(input_dim, hidden_size, layer_number, prior_sigma)
         elif self.model_name == 'GP':
             model = None #model needs to be initialized with the data
-        #     model = MCDropout(hidden_size)
-        # elif self.model_name == 'Deep Ensembles':
-        #     model = DeepEnsembles(hidden_size)
-        else:
-            raise ValueError('Invalid model type')
-        return model
+        self.device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
+        print(f'Using {self.device} for training')
+        self.complexity_weight = complexity_weight # Complexity weight for ELBO
     
     def init_optimizer(self, learning_rate):
         if self.model == None: # GP model needs to initialize with the data, then optimizer can be initialized
             return None 
         else:
             optimizer = Adam(self.model.parameters(), lr=learning_rate)
-        return optimizer
     
     def train_model(self, step): # 1. Train the model
         # Split the pool data into train and validation sets
         if self.validation_size > 0:
             train, val = train_test_split(self.known_data, test_size=self.validation_size)
+
             if self.model_name == 'GP':
                 # no train and val loader needed for GP, since not operating in batches
                 train_loader = train
@@ -229,6 +227,7 @@ class RunModel:
         x_pool = self.pool_data[:, :-1]
         x_pool_torch = torch.tensor(x_pool).to(self.device)
         with torch.no_grad():
+          
             if self.model_name == 'GP':
                 with torch.no_grad(), gpytorch.settings.fast_pred_var():
                     self.likelihood.eval()  # Also set the likelihood to evaluation mode for GP predictions
