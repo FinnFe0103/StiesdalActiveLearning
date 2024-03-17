@@ -102,8 +102,8 @@ class RunModel:
             #X_train = torch.tensor(scaler.fit_transform(train_loader[:, 0].reshape(-1, 1))).to(self.device)  # Adds an extra dimension to make X_train a 2D tensor
             #y_train = torch.tensor(train_loader[:, 1]).to(self.device)
 
-            X_train = torch.tensor(train_loader[:, 0]).to(self.device)
-            y_train = torch.tensor(train_loader[:, 1]).to(self.device)
+            X_train = torch.tensor(train_loader[:, :-1]).to(self.device)
+            y_train = torch.tensor(train_loader[:, -1]).to(self.device)
             
             # Initialize likelihood and model with training data
             self.likelihood = gpytorch.likelihoods.GaussianLikelihood().to(self.device)
@@ -161,8 +161,8 @@ class RunModel:
             self.model.eval()
             self.likelihood.eval()
 
-            X_val = torch.tensor(val_loader[:, 0]).to(self.device)
-            y_val = torch.tensor(val_loader[:, 1]).to(self.device)
+            X_val = torch.tensor(val_loader[:, :-1]).to(self.device)
+            y_val = torch.tensor(val_loader[:, -1]).to(self.device)
             
             total_val_loss = 0
             with torch.no_grad(), gpytorch.settings.fast_pred_var():
@@ -195,8 +195,11 @@ class RunModel:
         
     def evaluate_pool_data(self, step):
         # Convert pool data to PyTorch tensors and move them to the correct device
-        x_pool_torch = torch.tensor(self.pool_data[:, :-1], dtype=torch.float32).to(self.device)
-        y_pool_torch = torch.tensor(self.pool_data[:, -1], dtype=torch.float32).unsqueeze(1).to(self.device)
+        x_pool_torch = torch.tensor(self.pool_data[:, :-1]).to(self.device)
+        y_pool_torch = torch.tensor(self.pool_data[:, -1]).to(self.device)
+        
+        #x_pool_torch = torch.tensor(self.pool_data[:, :-1], dtype=torch.float32).to(self.device)
+        #y_pool_torch = torch.tensor(self.pool_data[:, -1], dtype=torch.float32).unsqueeze(1).to(self.device)
 
         self.model.eval()  # Set the model to evaluation mode
         
@@ -204,7 +207,8 @@ class RunModel:
             if self.model_name == 'GP':
                 # For GP, the model's output is a distribution, from which we can get the mean as predictions
                 self.likelihood.eval()  # Also set the likelihood to evaluation mode
-                prediction = self.model(x_pool_torch)
+                print(x_pool_torch.shape)
+                prediction = self.model(x_pool_torch.unsqueeze(0))  # Add unsqueeze to match expected dimensions
                 predictions = self.likelihood(prediction)  # Get the predictive posterior
                 
                 # Compute MSE Loss for GP
@@ -323,9 +327,9 @@ if __name__ == '__main__':
     
     # Active learning parameters
     parser.add_argument('-al', '--active_learning', action='store_true', help='Use active learning (AL) or random sampling (RS)')
-    parser.add_argument('-s', '--steps', type=int, default=10, help='Number of steps')
-    parser.add_argument('-e', '--epochs', type=int, default=150, help='Number of epochs')
-    parser.add_argument('-ss', '--samples_per_step', type=int, default=10, help='Samples to be selected per step and initial samplesize')
+    parser.add_argument('-s', '--steps', type=int, default=50, help='Number of steps')
+    parser.add_argument('-e', '--epochs', type=int, default=50, help='Number of epochs')
+    parser.add_argument('-ss', '--samples_per_step', type=int, default=20, help='Samples to be selected per step and initial samplesize')
     parser.add_argument('-vs', '--validation_size', type=float, default=0.2, help='Size of the validation set in percentage')
     
     # Output parameters    
