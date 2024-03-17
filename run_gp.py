@@ -325,8 +325,8 @@ if __name__ == '__main__':
     parser.add_argument('-al', '--active_learning', action='store_true', help='Use active learning (AL) or random sampling (RS)')
     parser.add_argument('-s', '--steps', type=int, default=10, help='Number of steps')
     parser.add_argument('-e', '--epochs', type=int, default=150, help='Number of epochs')
-    parser.add_argument('-ss', '--samples_per_step', type=int, default=100, help='Samples to be selected per step and initial samplesize')
-    parser.add_argument('-vs', '--validation_size', type=float, default=20, help='Size of the validation set in percentage')
+    parser.add_argument('-ss', '--samples_per_step', type=int, default=10, help='Samples to be selected per step and initial samplesize')
+    parser.add_argument('-vs', '--validation_size', type=float, default=0.2, help='Size of the validation set in percentage')
     
     # Output parameters    
     parser.add_argument('-dr', '--directory', type=str, default='_plots', help='Directory to save the ouputs')
