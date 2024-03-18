@@ -1,5 +1,5 @@
 import os
-os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
+#os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
 import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
@@ -10,9 +10,12 @@ import datetime
 import torch
 import gpytorch
 import argparse
+from scipy.stats import norm
 from torch.optim import Adam
 from sklearn.model_selection import train_test_split
 from sklearn.decomposition import PCA
+from sklearn.svm import SVR
+from sklearn.metrics import mean_squared_error
 from torch.utils.tensorboard import SummaryWriter
 # Module imports
 from data import Dataprep, load_data
@@ -38,93 +41,61 @@ class RunModel:
         self.data_known, self.data_pool = self.data.data_known, self.data.data_pool
 
         # Active learning parameters
-        self.active_learning = active_learning # Whether to use active learning or random sampling
+        self.active_learning = active_learning # Which acquisition function to use
         self.steps = steps # Number of steps for the active learning
         self.epochs = epochs # Number of epochs per step of active learning
         self.validation_size = validation_size # Size of the validation set in percentage
 
         # Initialize the model and optimizer
         self.model_name = model_name # Name of the model
+        self.learning_rate = learning_rate # Learning rate for the optimizer
         self.init_model(self.data_known.shape[1]-1, hidden_size, layer_number, prior_sigma) # Initialize the model
-        self.criterion = torch.nn.MSELoss() # Loss function
-        self.init_optimizer(learning_rate) # Initialize the optimizer
         self.device = torch.device("mps" if torch.backends.mps.is_available() and self.model_name != "GP" else "cpu")
         print(f'Using {self.device} for training')
         self.complexity_weight = complexity_weight # Complexity weight for ELBO
 
-        # GP-specific parameters
-        if self.model_name == 'GP':
-            self.likelihood = None
-            self.mll = None
-        self.learning_rate = learning_rate # Learning rate for the optimizer
-
     def init_model(self, input_dim, hidden_size, layer_number, prior_sigma): # 0.1 Initialize the model
         if self.model_name == 'BNN':
             self.model = BayesianNetwork(input_dim, hidden_size, layer_number, prior_sigma)
-        elif self.model_name == 'GP':
-            self.model = None #model needs to be initialized with the data
+            self.init_optimizer_criterion(self.learning_rate) # Initialize the optimizer
+        elif self.model_name == 'GP': # Model and optimizer are initialized in the training step
+            self.model = None
+            self.likelihood = None # Initialize the likelihood
+            self.mll = None # Initialize the marginal log likelihood
+        elif self.model_name == 'SVR':
+            self.model = SVR(kernel='rbf', C=5, epsilon=0.05)
+            self.init_optimizer_criterion(self.learning_rate) # Initialize the optimizer
     
-    def init_optimizer(self, learning_rate):
-        if self.model == None: # GP model needs to initialize with the data, then optimizer can be initialized
-            self.optimizer = None 
-        else:
+    def init_optimizer_criterion(self, learning_rate): # 0.2 Initialize the optimizer
+        if self.model_name == 'BNN':
             self.optimizer = Adam(self.model.parameters(), lr=learning_rate)
+            self.criterion = torch.nn.MSELoss() # MSE
+        elif self.model_name == 'GP':
+            self.optimizer = Adam(self.model.parameters(), lr=learning_rate)
+            self.criterion = torch.nn.MSELoss() # MSE
+        elif self.model_name == 'SVR':
+            self.optimizer = None # SVR does not have an optimizer
+            self.criterion = mean_squared_error # MSE
     
     def train_model(self, step): # 1. Train the model
         # Split the pool data into train and validation sets
         if self.validation_size > 0:
             train, val = train_test_split(self.data_known, test_size=self.validation_size)
-
-            if self.model_name == 'GP':
-                # no train and val loader needed for GP, since not operating in batches
-                train_loader = train
+            if self.model_name == 'GP' or self.model_name == 'SVR': # no train and val loader needed for GP/SVR, since not operating in batches
+                train_loader = train 
                 val_loader = val
-            else:
+            elif self.model_name == 'BNN':
                 train_loader = load_data(train)
                 val_loader = load_data(val)
         elif self.validation_size == 0:
-            if self.model_name == 'GP':
-                # no train and val loader needed for GP, since not operating in batches
-                train_loader = self.data_known
-            else:
+            if self.model_name == 'GP' or self.model_name == 'SVR': # no train loader needed for GP/SVR, since not operating in batches
+                train_loader = self.data_known 
+            elif self.model_name == 'BNN':
                 train_loader = load_data(self.data_known)
         else:
             raise ValueError('Invalid validation size')
 
-        if self.model_name == 'GP':
-            # GP Training process
-            X_train = torch.tensor(train_loader[:, :-1]).to(self.device)
-            y_train = torch.tensor(train_loader[:, -1]).to(self.device)
-            
-            # Initialize likelihood and model with training data
-            self.likelihood = gpytorch.likelihoods.GaussianLikelihood().to(self.device)
-            self.likelihood.noise = 0.01 #hyperparameter
-            self.model = ExactGPModel(X_train, y_train, self.likelihood).to(self.device)
-            self.init_optimizer(self.learning_rate)
-
-            self.model.train()
-            self.likelihood.train()
-            self.mll = gpytorch.mlls.ExactMarginalLogLikelihood(self.likelihood, self.model)
-
-            for epoch in range(self.epochs):
-                start_epoch = time.time()
-                self.optimizer.zero_grad()
-                output = self.model(X_train)
-                train_loss = -self.mll(output, y_train) 
-                train_loss.backward()
-                self.optimizer.step()
-
-                self.writer.add_scalar('loss/train', train_loss, step*self.epochs+epoch+1)
-                if self.verbose:
-                    print(f'Step: {step+1} | Epoch: {epoch+1} of {self.epochs} | Train-Loss: {train_loss:.4f} | Lengthscale: {self.model.covar_module.base_kernel.lengthscale.item():.3f} | Noise: {self.likelihood.noise.item():.3f} | {time.time() - start_epoch:.2f} seconds')
-                
-
-            if self.validation_size > 0:
-                # Evaluation step here, assuming evaluate_model method exists
-                self.evaluate_val_data(val_loader, step)
-
-        else:
-            # BNN Training
+        if self.model_name == 'BNN': # BNN Training
             self.model.to(self.device) # move the model to the configured device
 
             for epoch in range(self.epochs):
@@ -157,9 +128,63 @@ class RunModel:
             if self.validation_size > 0:
                 self.evaluate_val_data(val_loader, step) # Evaluate the model on the validation set
 
+        elif self.model_name == 'GP': # GP Training
+            X_train = torch.tensor(train_loader[:, :-1]).to(self.device)
+            y_train = torch.tensor(train_loader[:, -1]).to(self.device)
+            
+            # Initialize likelihood and model with training data
+            self.likelihood = gpytorch.likelihoods.GaussianLikelihood().to(self.device)
+            self.likelihood.noise = 0.01 #hyperparameter
+            self.model = ExactGPModel(X_train, y_train, self.likelihood).to(self.device)
+            self.init_optimizer_criterion(self.learning_rate)
+
+            self.model.train()
+            self.likelihood.train()
+            self.mll = gpytorch.mlls.ExactMarginalLogLikelihood(self.likelihood, self.model)
+
+            for epoch in range(self.epochs):
+                start_epoch = time.time()
+                self.optimizer.zero_grad()
+                output = self.model(X_train)
+                train_loss = -self.mll(output, y_train) 
+                train_loss.backward()
+                self.optimizer.step()
+
+                self.writer.add_scalar('loss/train', train_loss, step*self.epochs+epoch+1)
+                if self.verbose:
+                    print(f'Step: {step+1} | Epoch: {epoch+1} of {self.epochs} | Train-Loss: {train_loss:.4f} | Lengthscale: {self.model.covar_module.base_kernel.lengthscale.item():.3f} | Noise: {self.likelihood.noise.item():.3f} | {time.time() - start_epoch:.2f} seconds')
+                
+
+            if self.validation_size > 0:
+                # Evaluation step here, assuming evaluate_model method exists
+                self.evaluate_val_data(val_loader, step)
+
+        elif self.model_name == 'SVR': # SVR Training
+            self.model.fit(train_loader[:, :-1], train_loader[:, -1])
+
+            if self.validation_size > 0:
+                self.evaluate_val_data(val_loader, step)
+
     def evaluate_val_data(self, val_loader, step): # 1.1 Evaluate the model on the validation set
-        if self.model_name == 'GP':
-            # GP-specific evaluation process
+        if self.model_name == 'BNN': # BNN-specific evaluation process
+            self.model.eval()  # Set the model to evaluation mode
+            
+            total_val_loss = 0
+            with torch.no_grad():  # Inference mode, gradients not required
+                for x, y in val_loader:
+                    x, y = x.to(self.device), y.to(self.device)
+                    # Calculate loss using sample_elbo for Bayesian inference
+                    loss = self.model.sample_elbo(inputs=x, labels=y,
+                                                criterion=self.criterion, sample_nbr=3,
+                                                complexity_cost_weight=self.complexity_weight)
+                    total_val_loss += loss.item()
+
+            step_val_loss = total_val_loss / len(val_loader) # Average loss over batches
+            self.writer.add_scalar('loss/val', step_val_loss, step+1)
+            if self.verbose:
+                print(f'Step: {step+1} | Val-Loss: {step_val_loss:.4f}')
+        
+        elif self.model_name == 'GP': # GP-specific evaluation process
             self.model.eval()
             self.likelihood.eval()
 
@@ -175,43 +200,38 @@ class RunModel:
             if self.verbose:
                 print(f'Step: {step+1}, Val-Loss: {total_val_loss:.4f}')
         
-        else:
-            self.model.eval()  # Set the model to evaluation mode
-            total_val_loss = 0
+        elif self.model_name == 'SVR': # SVR-specific evaluation process
+            y_val = val_loader[:, -1]
+            x_val = val_loader[:, :-1]
+            y_pred = self.model.predict(x_val)
+            loss = self.criterion(y_pred, y_val)
+            print('validation MSE1:', loss)
 
-            with torch.no_grad():  # Inference mode, gradients not required
-                for x, y in val_loader:
-                    x, y = x.to(self.device), y.to(self.device)
-                    # Calculate loss using sample_elbo for Bayesian inference
-                    loss = self.model.sample_elbo(inputs=x, labels=y,
-                                                criterion=self.criterion, sample_nbr=3,
-                                                complexity_cost_weight=self.complexity_weight)
-                    total_val_loss += loss.item()
-
-            step_val_loss = total_val_loss / len(val_loader) # Average loss over batches
-            self.writer.add_scalar('loss/val', step_val_loss, step+1)
+            self.writer.add_scalar('loss/val', loss, step+1)
             if self.verbose:
-                print(f'Step: {step+1} | Val-Loss: {step_val_loss:.4f}')
+                print(f'Step: {step+1} | Val-Loss: {loss:.4f}')
         
     def evaluate_pool_data(self, step): # 2. Evaluate the model on the pool data
         # Convert pool data to PyTorch tensors and move them to the correct device
         x_pool_torch = torch.tensor(self.data_pool[:, :-1]).to(self.device)
         y_pool_torch = torch.tensor(self.data_pool[:, -1]).unsqueeze(1).to(self.device) #.view(-1, 1).to(self.device)  # Ensure y_pool is the correct shape
 
-        self.model.eval()  # Set the model to evaluation mode
-        with torch.no_grad():  # No need to calculate gradients
-            if self.model_name == 'GP':
-                # For GP, the model's output is a distribution, from which we can get the mean as predictions
+        if self.model_name == 'BNN':
+            self.model.eval()  # Set the model to evaluation mode
+            with torch.no_grad():  # No need to calculate gradients
+                predictions = self.model(x_pool_torch)
+                loss = self.criterion(predictions, y_pool_torch)   # Calculate the loss
+        elif self.model_name == 'GP':
+            self.model.eval()  # Set the model to evaluation mode
+            with torch.no_grad():  # No need to calculate gradients
                 self.likelihood.eval()  # Also set the likelihood to evaluation mode
                 prediction = self.model(x_pool_torch.unsqueeze(0))  # Add unsqueeze to match expected dimensions
                 predictions = self.likelihood(prediction)  # Get the predictive posterior
 
-                # Compute MSE Loss for GP
-                loss = self.criterion(predictions.mean.reshape(-1, 1), y_pool_torch) 
-
-            else:
-                predictions = self.model(x_pool_torch)
-                loss = self.criterion(predictions, y_pool_torch)   # Calculate the loss
+                loss = self.criterion(predictions.mean.reshape(-1, 1), y_pool_torch) # Compute MSE Loss for GP
+        elif self.model_name == 'SVR':
+            predictions = self.model.predict(self.data_pool[:, :-1])
+            loss = self.criterion(predictions, self.data_pool[:, -1])
             
         # Log the loss to TensorBoard
         self.writer.add_scalar('loss/pool', loss.item(), step + 1)
@@ -220,51 +240,55 @@ class RunModel:
             print(f'Step: {step + 1} | Pool-Loss: {loss.item()}')
     
     def predict(self, samples=500): # 3. Predict the mean and std (uncertainty) on the pool data
-        self.model.eval()  # Set model to evaluation mode
 
         x_pool = self.data_pool[:, :-1]
         x_pool_torch = torch.tensor(x_pool).to(self.device)
-          
-        if self.model_name == 'GP':
+
+        if self.model_name == 'BNN':
+            self.model.eval()  # Set model to evaluation mode
+            with torch.no_grad():
+                preds = [self.model(x_pool_torch) for _ in range(samples)]
+            preds = torch.stack(preds)  # Shape: [samples, N, output_dim]
+            means = preds.mean(dim=0).detach().cpu().numpy()  # calculate the mean of the predictions
+            stds = preds.std(dim=0).detach().cpu().numpy()  # calculate the standard deviation of the predictions
+        elif self.model_name == 'GP':
+            self.model.eval()  # Set model to evaluation mode
             with torch.no_grad(), gpytorch.settings.fast_pred_var():
                 self.likelihood.eval()  # Also set the likelihood to evaluation mode for GP predictions
                 preds = self.model(x_pool_torch)
                 observed_pred = self.likelihood(preds)
             means = observed_pred.mean.numpy()
             stds = observed_pred.stddev.numpy()
-        else:
-            with torch.no_grad():
-                preds = [self.model(x_pool_torch) for _ in range(samples)]
-            preds = torch.stack(preds)  # Shape: [samples, N, output_dim]
-            means = preds.mean(dim=0).detach().cpu().numpy()  # calculate the mean of the predictions
-            stds = preds.std(dim=0).detach().cpu().numpy()  # calculate the standard deviation of the predictions
-
-        #self.preds_csv(preds, 'prediction')
+        elif self.model_name == 'SVR':
+            means = self.model.predict(x_pool)
+            stds = np.zeros_like(means)
 
         return means, stds  # Return both the mean and standard deviation of predictions
 
     def acquisition_function(self, means, stds, samples_per_step): # 4. Select the next samples from the pool
-        if self.active_learning == 'UC':
+        best_y = np.max(self.data_known[:, -1])
+        
+        if self.active_learning == 'US':
             uncertainty = stds.squeeze() # Uncertainty is the standard deviation of the predictions
             selected_indices = uncertainty.argsort()[-samples_per_step:] # Select the indices with the highest uncertainty
-            return selected_indices
         elif self.active_learning == 'RS':
             selected_indices = random.sample(range(len(self.data_pool)), samples_per_step)
             return selected_indices
         elif self.active_learning == 'EI': # Expected Improvement
-            pass
+            z = (means - best_y) / stds
+            ei = (means - best_y) * norm.cdf(z) + stds * norm.pdf(z)
+            selected_indices = ei.squeeze().argsort()[-samples_per_step:] # Select the indices with the highest EI
         elif self.active_learning == 'PI': # Probability of Improvement
-            pass
+            z = (means - best_y) / stds
+            pi = norm.cdf(z)
+            selected_indices = pi.squeeze().argsort()[-samples_per_step:] # Select the indices with the highest PI
         elif self.active_learning == 'UCB': # Upper Confidence Bound
             ucb = means + 2.0 * stds
             selected_indices = ucb.squeeze().argsort()[-samples_per_step:] # Select the indices with the highest UCB
-            print(ucb)
-            print(selected_indices)
-            print(ucb.shape)
-            print(selected_indices.shape)
-            return selected_indices
         else:
-            print('Invalid active learning method')
+            raise ValueError('Invalid acquisition function')
+        
+        return selected_indices
             
     def plot(self, means, stds, selected_indices, step, x_highest_pred, y_highest_pred, x_highest_actual, y_highest_actual): #4.1 Plot the predictions and selected indices
         x_pool = self.data_pool[:, :-1] # [observations, features]
@@ -288,16 +312,16 @@ class RunModel:
         df = pd.concat([pd.DataFrame({'x': x_pool.squeeze(), 'y': y_val.squeeze()}) for y_val in y_vals], ignore_index=True)
 
         # Plotting
-        fig = plt.figure()
+        fig = plt.figure(figsize=(8, 6), dpi=120)
         sns.lineplot(data=df, x="x", y="y")
         plt.scatter(x_pool, y_pool, c="green", marker="*", alpha=0.1)  # Plot the data pairs in the pool
         plt.scatter(x_selected, y_selected, c="red", marker="*", alpha=0.2)  # plot the train data on top
         plt.scatter(x_pool_selected, y_pool_selected, c="blue", marker="o", alpha=0.3)  # Highlight selected data points
         plt.scatter(x_highest_pred, y_highest_pred, c="purple", marker="o", alpha=0.3)
         plt.scatter(x_highest_actual, y_highest_actual, c="orange", marker="o", alpha=0.1)
-        plt.title(self.run_name.replace("_", " ") + f' | Step {step + 1}', fontsize='small')
+        plt.title(self.run_name.replace("_", " ") + f' | Step {step + 1}', fontsize=10)
         plt.xlabel('1 Principal Component' if pca_applied else 'x')
-        plt.legend(['Mean prediction', 'Confidence Interval', 'Pool data (unseen)', 'Seen data', 'Selected data', 'Final Prediction'], fontsize='small')
+        plt.legend(['Mean prediction', 'Confidence Interval', 'Pool data (unseen)', 'Seen data', 'Selected data', 'Final Prediction'], fontsize=8)
         plt.close(fig)
 
         # Log the table figure
@@ -307,10 +331,10 @@ class RunModel:
             pca = PCA(n_components=2)
             data_plot = pca.fit_transform(self.data_pool[:, :-1]) # [observations, 2]
             # Plotting
-            fig = plt.figure()
+            fig = plt.figure(figsize=(8, 6), dpi=120)
             plt.scatter(data_plot[:, 0], data_plot[:, 1], c='lightgray', s=30, label='Data points')
             plt.scatter(data_plot[selected_indices, 0], data_plot[selected_indices, 1], c='blue', s=50, label='Selected Samples')
-            plt.title(self.run_name.replace("_", " ") + f' | Step {step + 1}', fontsize='small')
+            plt.title(self.run_name.replace("_", " ") + f' | Step {step + 1}', fontsize=10)
             plt.xlabel('Principal Component 1')
             plt.ylabel('Principal Component 2')
             plt.legend(fontsize='small')
@@ -322,31 +346,29 @@ class RunModel:
         self.data_known = np.append(self.data_known, self.data_pool[selected_indices], axis=0)
         self.data_pool = np.delete(self.data_pool, selected_indices, axis=0)
 
-    def preds_csv(self, preds, name):
-        preds = preds.detach().cpu().numpy()
-        preds = preds.reshape(-1, preds.shape[-1])
-        preds = pd.DataFrame(preds)
-        preds.to_csv(f'{name}_preds_{self.run_name}.csv', index=False)
-
-    def final_prediction(self, step, topk, samples=500):
-        self.model.eval()
+    def final_prediction(self, topk, samples=500):
         x_total = np.concatenate((self.data_pool[:, :-1], self.data_known[:, :-1]), axis=0)
         y_total = np.concatenate((self.data_pool[:, -1], self.data_known[:, -1]), axis=0)
         
         x_total_torch = torch.tensor(x_total).to(self.device)
         
-        if self.model_name == 'GP':
+        if self.model_name == 'BNN':
+            self.model.eval()
+            with torch.no_grad():
+                preds = [self.model(x_total_torch) for _ in range(samples)]
+            preds = torch.stack(preds)
+            means = preds.mean(dim=0).detach().cpu().numpy().squeeze()
+            highest_indices_pred = np.argsort(means)[-topk:]
+        elif self.model_name == 'GP':
+            self.model.eval()
             with torch.no_grad(), gpytorch.settings.fast_pred_var():
                 self.likelihood.eval()  # Also set the likelihood to evaluation mode for GP predictions
                 preds = self.model(x_total_torch)
                 observed_pred = self.likelihood(preds)
             means = observed_pred.mean.numpy()
             highest_indices_pred = np.argsort(means)[-topk:]
-        else:
-            with torch.no_grad():
-                preds = [self.model(x_total_torch) for _ in range(samples)]
-            preds = torch.stack(preds)
-            means = preds.mean(dim=0).detach().cpu().numpy().squeeze()
+        elif self.model_name == 'SVR':
+            means = self.model.predict(x_total)
             highest_indices_pred = np.argsort(means)[-topk:]
 
         x_highest_pred = x_total[highest_indices_pred]
@@ -373,6 +395,7 @@ class RunModel:
 if __name__ == '__main__':
 
     parser = argparse.ArgumentParser(description='Run the BNN model')
+
     # Dataset parameters
     parser.add_argument('-ds', '--dataset_type', type=str, default='Generated_2000', help='1. Generated_2000, 2. Caselist')
     parser.add_argument('-sc', '--scaling', type=str, default='Standard', help='Scaling to be used: 1. Standard, 2. Minmax, 3. None')
@@ -389,7 +412,7 @@ if __name__ == '__main__':
     parser.add_argument('-cw', '--complexity_weight', type=float, default=0.01, help='Complexity weight')
 
     # Active learning parameters
-    parser.add_argument('-al', '--active_learning', type=str, default='UCB', help='Type of active learning/acquisition function: 1. UC, 2. RS, 3. EI, 4. PI, 5. UCB') # Uncertainty, Random, Expected Improvement, Probability of Improvement, Upper Confidence Bound
+    parser.add_argument('-al', '--active_learning', type=str, default='UCB', help='Type of active learning/acquisition function: 1. US, 2. RS, 3. EI, 4. PI, 5. UCB') # Uncertainty, Random, Expected Improvement, Probability of Improvement, Upper Confidence Bound
     parser.add_argument('-s', '--steps', type=int, default=2, help='Number of steps')
     parser.add_argument('-e', '--epochs', type=int, default=100, help='Number of epochs')
     parser.add_argument('-ss', '--samples_per_step', type=int, default=100, help='Samples to be selected per step and initial samplesize')
@@ -406,6 +429,8 @@ if __name__ == '__main__':
         opt_list = ['-sc', '-hs', '-ln', '-ps', '-cw', '-lr', '-al', '-s', '-e', '-ss', '-vs']
     elif args.model == 'GP':
         opt_list = ['-sc', '-lr', '-al', '-s', '-e', '-ss', '-vs']
+    elif args.model == 'SVR':
+        opt_list = ['-sc', '-lr', '-al', '-s', '-e', '-ss', '-vs']
     option_value_list = [(action.option_strings[0].lstrip('-'), getattr(args, action.dest)) 
                          for action in parser._actions if action.option_strings and action.option_strings[0] in opt_list]
     run_name = '_'.join(f"{abbr}{str(value)}" for abbr, value in option_value_list)
@@ -417,7 +442,7 @@ if __name__ == '__main__':
     for step in range(model.steps):
         start_step = time.time()
         model.train_model(step) # Train the model
-        x_highest_pred, y_highest_pred, x_highest_actual, y_highest_actual = model.final_prediction(step, topk=args.topk)
+        x_highest_pred, y_highest_pred, x_highest_actual, y_highest_actual = model.final_prediction(topk=args.topk) # Get the final predictions as if this was the last step
         model.evaluate_pool_data(step) # Evaluate the model on the pool data
         means, stds = model.predict() # Predict the uncertainty on the pool data
         selected_indices = model.acquisition_function(means, stds, args.samples_per_step) # Select the next samples from the pool
@@ -429,4 +454,4 @@ if __name__ == '__main__':
 
 # BNN: -v -ln 3 -hs 4 -ps 0.0000001 -cw 0.01 -dr v1 -al
 #      -v -ln 3 -hs 4 -ps 0.0000001 -cw 0.001 -dr v1 -al UCB -s 5 -e 100
-# GP Demo: -v -m GP -sc Minmax -lr 0.1 -al -s 10 -e 10 -ss 25 -vs 0.2 
+# GP Demo: -v -m GP -sc Minmax -lr 0.1 -al US -s 10 -e 10 -ss 25 -vs 0.2
