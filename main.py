@@ -8,17 +8,16 @@ import time
 import random
 import datetime
 import torch
-from Models.BNN import BayesianNetwork
-from data import Dataprep, load_data
+import gpytorch
 import argparse
 from torch.optim import Adam
 from sklearn.model_selection import train_test_split
 from sklearn.decomposition import PCA
 from torch.utils.tensorboard import SummaryWriter
-
-# GP-specific imports
+# Module imports
+from data import Dataprep, load_data
+from Models.BNN import BayesianNetwork
 from Models.ExactGP import ExactGPModel
-import gpytorch
 
 
 class RunModel:
@@ -30,13 +29,13 @@ class RunModel:
         self.verbose = verbose # Print outputs
         os.makedirs('_plots', exist_ok=True) # Directory to save the outputs
         current_time = datetime.datetime.now().strftime("%H%M%S") # Unique directory based on datetime for each run
-        log_dir = os.path.join('Models/runs', model_name, directory, run_name + '_' + current_time)
+        log_dir = os.path.join('Models/runs', model_name, directory, current_time + '_' + run_name)
         self.writer = SummaryWriter(log_dir) # TensorBoard
         print('Run saved under:', log_dir)
 
         # Data parameters
         self.data = Dataprep(dataset_type, sensor, scaling=scaling, initial_samplesize=samples_per_step)
-        self.known_data, self.pool_data = self.data.known_data, self.data.pool_data
+        self.data_known, self.data_pool = self.data.data_known, self.data.data_pool
 
         # Active learning parameters
         self.active_learning = active_learning # Whether to use active learning or random sampling
@@ -46,9 +45,9 @@ class RunModel:
 
         # Initialize the model and optimizer
         self.model_name = model_name # Name of the model
-        self.model = self.init_model(self.known_data.shape[1]-1, hidden_size, layer_number, prior_sigma) # Initialize the model
+        self.init_model(self.data_known.shape[1]-1, hidden_size, layer_number, prior_sigma) # Initialize the model
         self.criterion = torch.nn.MSELoss() # Loss function
-        self.optimizer = self.init_optimizer(learning_rate) # Initialize the optimizer
+        self.init_optimizer(learning_rate) # Initialize the optimizer
         self.device = torch.device("mps" if torch.backends.mps.is_available() and self.model_name != "GP" else "cpu")
         print(f'Using {self.device} for training')
         self.complexity_weight = complexity_weight # Complexity weight for ELBO
@@ -61,20 +60,20 @@ class RunModel:
 
     def init_model(self, input_dim, hidden_size, layer_number, prior_sigma): # 0.1 Initialize the model
         if self.model_name == 'BNN':
-            model = BayesianNetwork(input_dim, hidden_size, layer_number, prior_sigma)
+            self.model = BayesianNetwork(input_dim, hidden_size, layer_number, prior_sigma)
         elif self.model_name == 'GP':
-            model = None #model needs to be initialized with the data
+            self.model = None #model needs to be initialized with the data
     
     def init_optimizer(self, learning_rate):
         if self.model == None: # GP model needs to initialize with the data, then optimizer can be initialized
-            return None 
+            self.optimizer = None 
         else:
             self.optimizer = Adam(self.model.parameters(), lr=learning_rate)
     
     def train_model(self, step): # 1. Train the model
         # Split the pool data into train and validation sets
         if self.validation_size > 0:
-            train, val = train_test_split(self.known_data, test_size=self.validation_size)
+            train, val = train_test_split(self.data_known, test_size=self.validation_size)
 
             if self.model_name == 'GP':
                 # no train and val loader needed for GP, since not operating in batches
@@ -86,9 +85,9 @@ class RunModel:
         elif self.validation_size == 0:
             if self.model_name == 'GP':
                 # no train and val loader needed for GP, since not operating in batches
-                train_loader = self.known_data
+                train_loader = self.data_known
             else:
-                train_loader = load_data(self.known_data)
+                train_loader = load_data(self.data_known)
         else:
             raise ValueError('Invalid validation size')
 
@@ -196,8 +195,8 @@ class RunModel:
         
     def evaluate_pool_data(self, step): # 2. Evaluate the model on the pool data
         # Convert pool data to PyTorch tensors and move them to the correct device
-        x_pool_torch = torch.tensor(self.pool_data[:, :-1]).to(self.device)
-        y_pool_torch = torch.tensor(self.pool_data[:, -1]).unsqueeze(1).to(self.device) #.view(-1, 1).to(self.device)  # Ensure y_pool is the correct shape
+        x_pool_torch = torch.tensor(self.data_pool[:, :-1]).to(self.device)
+        y_pool_torch = torch.tensor(self.data_pool[:, -1]).unsqueeze(1).to(self.device) #.view(-1, 1).to(self.device)  # Ensure y_pool is the correct shape
 
         self.model.eval()  # Set the model to evaluation mode
         with torch.no_grad():  # No need to calculate gradients
@@ -223,7 +222,7 @@ class RunModel:
     def predict(self, samples=500): # 3. Predict the mean and std (uncertainty) on the pool data
         self.model.eval()  # Set model to evaluation mode
 
-        x_pool = self.pool_data[:, :-1]
+        x_pool = self.data_pool[:, :-1]
         x_pool_torch = torch.tensor(x_pool).to(self.device)
           
         if self.model_name == 'GP':
@@ -244,28 +243,42 @@ class RunModel:
 
         return means, stds  # Return both the mean and standard deviation of predictions
 
-    def acquisition_function(self, means, stds, samples_per_step, step): # 4. Select the next samples from the pool
-        if self.active_learning:
+    def acquisition_function(self, means, stds, samples_per_step): # 4. Select the next samples from the pool
+        if self.active_learning == 'UC':
             uncertainty = stds.squeeze() # Uncertainty is the standard deviation of the predictions
             selected_indices = uncertainty.argsort()[-samples_per_step:] # Select the indices with the highest uncertainty
             return selected_indices
-            
-        else:
-            selected_indices = random.sample(range(len(self.pool_data)), samples_per_step)
+        elif self.active_learning == 'RS':
+            selected_indices = random.sample(range(len(self.data_pool)), samples_per_step)
             return selected_indices
+        elif self.active_learning == 'EI': # Expected Improvement
+            pass
+        elif self.active_learning == 'PI': # Probability of Improvement
+            pass
+        elif self.active_learning == 'UCB': # Upper Confidence Bound
+            ucb = means + 2.0 * stds
+            selected_indices = ucb.squeeze().argsort()[-samples_per_step:] # Select the indices with the highest UCB
+            print(ucb)
+            print(selected_indices)
+            print(ucb.shape)
+            print(selected_indices.shape)
+            return selected_indices
+        else:
+            print('Invalid active learning method')
             
-    def plot(self, means, stds, selected_indices, step, x_highest, y_highest): #4.1 Plot the predictions and selected indices
-        x_pool = self.pool_data[:, :-1] # [observations, features]
-        y_pool = self.pool_data[:, -1] # [observations]
-        x_selected = self.known_data[:, :-1] # [observations, features]
-        y_selected = self.known_data[:, -1] # [observations]
+    def plot(self, means, stds, selected_indices, step, x_highest_pred, y_highest_pred, x_highest_actual, y_highest_actual): #4.1 Plot the predictions and selected indices
+        x_pool = self.data_pool[:, :-1] # [observations, features]
+        y_pool = self.data_pool[:, -1] # [observations]
+        x_selected = self.data_known[:, :-1] # [observations, features]
+        y_selected = self.data_known[:, -1] # [observations]
         pca_applied = False
         # Check if dimensionality reduction is needed
         if x_pool.shape[1] > 1:
             pca = PCA(n_components=1)
             x_pool = pca.fit_transform(x_pool) # [observations, 1]
             x_selected = pca.transform(x_selected) # [observations, 1]
-            x_highest = pca.transform(x_highest) # [observations, 1]
+            x_highest_pred = pca.transform(x_highest_pred) # [observations, 1]
+            x_highest_actual = pca.transform(x_highest_actual) # [observations, 1]
             pca_applied = True
             
         x_pool_selected = x_pool[selected_indices] # [observations, 1]
@@ -280,7 +293,8 @@ class RunModel:
         plt.scatter(x_pool, y_pool, c="green", marker="*", alpha=0.1)  # Plot the data pairs in the pool
         plt.scatter(x_selected, y_selected, c="red", marker="*", alpha=0.2)  # plot the train data on top
         plt.scatter(x_pool_selected, y_pool_selected, c="blue", marker="o", alpha=0.3)  # Highlight selected data points
-        plt.scatter(x_highest, y_highest, c="purple", marker="o", alpha=0.3)
+        plt.scatter(x_highest_pred, y_highest_pred, c="purple", marker="o", alpha=0.3)
+        plt.scatter(x_highest_actual, y_highest_actual, c="orange", marker="o", alpha=0.1)
         plt.title(self.run_name.replace("_", " ") + f' | Step {step + 1}', fontsize='small')
         plt.xlabel('1 Principal Component' if pca_applied else 'x')
         plt.legend(['Mean prediction', 'Confidence Interval', 'Pool data (unseen)', 'Seen data', 'Selected data', 'Final Prediction'], fontsize='small')
@@ -289,9 +303,9 @@ class RunModel:
         # Log the table figure
         self.writer.add_figure(f'Prediction vs Actual Table Epoch {step + 1}', fig, step + 1)
         
-        if self.pool_data[:, :-1].shape[1] > 1:
+        if self.data_pool[:, :-1].shape[1] > 1:
             pca = PCA(n_components=2)
-            data_plot = pca.fit_transform(self.pool_data[:, :-1]) # [observations, 2]
+            data_plot = pca.fit_transform(self.data_pool[:, :-1]) # [observations, 2]
             # Plotting
             fig = plt.figure()
             plt.scatter(data_plot[:, 0], data_plot[:, 1], c='lightgray', s=30, label='Data points')
@@ -305,8 +319,8 @@ class RunModel:
             self.writer.add_figure(f'First two PCs with selected datapoints {step + 1}', fig, step + 1)
 
     def update_data(self, selected_indices): # 5. Update the known and pool data
-        self.known_data = np.append(self.known_data, self.pool_data[selected_indices], axis=0)
-        self.pool_data = np.delete(self.pool_data, selected_indices, axis=0)
+        self.data_known = np.append(self.data_known, self.data_pool[selected_indices], axis=0)
+        self.data_pool = np.delete(self.data_pool, selected_indices, axis=0)
 
     def preds_csv(self, preds, name):
         preds = preds.detach().cpu().numpy()
@@ -316,8 +330,8 @@ class RunModel:
 
     def final_prediction(self, step, topk, samples=500):
         self.model.eval()
-        x_total = np.concatenate((self.pool_data[:, :-1], self.known_data[:, :-1]), axis=0)
-        y_total = np.concatenate((self.pool_data[:, -1], self.known_data[:, -1]), axis=0)
+        x_total = np.concatenate((self.data_pool[:, :-1], self.data_known[:, :-1]), axis=0)
+        y_total = np.concatenate((self.data_pool[:, -1], self.data_known[:, -1]), axis=0)
         
         x_total_torch = torch.tensor(x_total).to(self.device)
         
@@ -327,18 +341,33 @@ class RunModel:
                 preds = self.model(x_total_torch)
                 observed_pred = self.likelihood(preds)
             means = observed_pred.mean.numpy()
-            highest_indices = np.argsort(means)[-topk:]
+            highest_indices_pred = np.argsort(means)[-topk:]
         else:
             with torch.no_grad():
                 preds = [self.model(x_total_torch) for _ in range(samples)]
             preds = torch.stack(preds)
             means = preds.mean(dim=0).detach().cpu().numpy().squeeze()
-            highest_indices = np.argsort(means)[-topk:]
+            highest_indices_pred = np.argsort(means)[-topk:]
 
-        x_highest = x_total[highest_indices]
-        y_highest = y_total[highest_indices]
+        x_highest_pred = x_total[highest_indices_pred]
+        y_highest_pred = y_total[highest_indices_pred]
 
-        return x_highest, y_highest
+        highest_indices_actual = np.argsort(y_total)[-topk:]
+
+        x_highest_actual = x_total[highest_indices_actual]
+        y_highest_actual = y_total[highest_indices_actual]
+
+        common_indices = np.intersect1d(highest_indices_pred, highest_indices_actual)
+        percentage_common = (len(common_indices) / len(highest_indices_pred)) * 100
+
+        num_pool_data = len(self.data_pool)
+        num_from_pool = np.sum(highest_indices_pred < num_pool_data)
+        num_from_known = len(highest_indices_pred) - num_from_pool
+
+        print(f'Percentage of common indices in top {topk} predictions: {percentage_common:.2f}%')
+        print(f'Number of predictions from pool: {num_from_pool} | Number of predictions from known data: {num_from_known}')
+
+        return x_highest_pred, y_highest_pred, x_highest_actual, y_highest_actual
     
 
 if __name__ == '__main__':
@@ -360,7 +389,7 @@ if __name__ == '__main__':
     parser.add_argument('-cw', '--complexity_weight', type=float, default=0.01, help='Complexity weight')
 
     # Active learning parameters
-    parser.add_argument('-al', '--active_learning', action='store_true', help='Use active learning (AL) or random sampling (RS)')
+    parser.add_argument('-al', '--active_learning', type=str, default='UCB', help='Type of active learning/acquisition function: 1. UC, 2. RS, 3. EI, 4. PI, 5. UCB') # Uncertainty, Random, Expected Improvement, Probability of Improvement, Upper Confidence Bound
     parser.add_argument('-s', '--steps', type=int, default=2, help='Number of steps')
     parser.add_argument('-e', '--epochs', type=int, default=100, help='Number of epochs')
     parser.add_argument('-ss', '--samples_per_step', type=int, default=100, help='Samples to be selected per step and initial samplesize')
@@ -388,15 +417,16 @@ if __name__ == '__main__':
     for step in range(model.steps):
         start_step = time.time()
         model.train_model(step) # Train the model
-        x_highest, y_highest = model.final_prediction(step, topk=args.topk)
+        x_highest_pred, y_highest_pred, x_highest_actual, y_highest_actual = model.final_prediction(step, topk=args.topk)
         model.evaluate_pool_data(step) # Evaluate the model on the pool data
         means, stds = model.predict() # Predict the uncertainty on the pool data
-        selected_indices = model.acquisition_function(means, stds, args.samples_per_step, step) # Select the next samples from the pool
-        model.plot(means, stds, selected_indices, step, x_highest, y_highest) # Plot the predictions and selected indices
+        selected_indices = model.acquisition_function(means, stds, args.samples_per_step) # Select the next samples from the pool
+        model.plot(means, stds, selected_indices, step, x_highest_pred, y_highest_pred, x_highest_actual, y_highest_actual) # Plot the predictions and selected indices
         model.update_data(selected_indices) # Update the known and pool data
 
-        print(f'Updated pool and known data (AL = {args.active_learning}):', model.pool_data.shape, model.known_data.shape)
+        print(f'Updated pool and known data (AL = {args.active_learning}):', model.data_pool.shape, model.data_known.shape)
         print(f'Step: {step+1} of {model.steps} | {time.time() - start_step:.2f} seconds')
 
-# BNN: -v -ln 3 -hs 4 -ps 0.0000001 -cw 0.01 -dr v1
+# BNN: -v -ln 3 -hs 4 -ps 0.0000001 -cw 0.01 -dr v1 -al
+#      -v -ln 3 -hs 4 -ps 0.0000001 -cw 0.001 -dr v1 -al UCB -s 5 -e 100
 # GP Demo: -v -m GP -sc Minmax -lr 0.1 -al -s 10 -e 10 -ss 25 -vs 0.2 
