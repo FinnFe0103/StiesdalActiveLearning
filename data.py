@@ -80,8 +80,10 @@ class Dataprep:
     def initial_sample(self, x, y, initial_samplesize, sampling_method): # Select the initial samples using K-Medoids clustering (probably needs to be updated using another method)
         
         if sampling_method == 'LHC':
+            if len(x.shape) <= 1:
+                raise ValueError('LHC sampling is only available for multi-dimensional input data. Please use random sampling instead.')
             # scale the x values to the range [0, 1]
-            x_scaled = (x - np.min(x, axis=0)) / (np.max(x, axis=0) - np.min(x, axis=0))
+            x_scaled, _ = self.normalize_data(x, y, 'Minmax')
             # get the min and max values for every input feature 
             minmax_values = [[np.min(x_scaled[:, i]), np.max(x_scaled[:, i])] for i in range(x_scaled.shape[1])]
             minmax_values = np.array(minmax_values)
