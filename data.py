@@ -19,7 +19,7 @@ class Dataprep:
             self.x, self.y = self.generate_data(-10, 10, dataset_size)
 
         self.x, self.y = self.normalize_data(self.x, self.y, scaling)
-        self.known_data, self.pool_data = self.initial_sample(self.x, self.y, initial_samplesize)
+        self.data_known, self.data_pool = self.initial_sample(self.x, self.y, initial_samplesize)
 
     def generate_data(self, start, end, n): # Generate synthetic data
         x = np.linspace(start, end, n)
@@ -103,10 +103,10 @@ class Dataprep:
             plt.legend(fontsize='small')
             plt.savefig('_plots/selected.png')
 
-        known_data = np.column_stack((x_selected, y_selected))
-        pool_data = np.column_stack((x_pool, y_pool))
+        data_known = np.column_stack((x_selected, y_selected))
+        data_pool = np.column_stack((x_pool, y_pool))
 
-        return known_data, pool_data
+        return data_known, data_pool
 
 def load_data(numpy_array, batch_size = 16): # Split the features and target and load the data into a torch DataLoader
     features = numpy_array[:, :-1]#.squeeze()  # All but the last column
