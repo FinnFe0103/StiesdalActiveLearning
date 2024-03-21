@@ -11,7 +11,7 @@ import torch
 
 class Dataprep:
     # Upon initialization, load the data, normalize it, and select the initial samples
-    def __init__(self, dataset_type, sensor, scaling, initial_samplesize):
+    def __init__(self, dataset_type, sensor, scaling, initial_samplesize, sampling_method):
         if dataset_type == 'Caselist':
             self.x, self.y, self.groups = self.load_caselist(sensor)
         elif dataset_type.split('_')[0] == 'Generated':
@@ -19,7 +19,11 @@ class Dataprep:
             self.x, self.y = self.generate_data(-10, 10, dataset_size)
 
         self.x, self.y = self.normalize_data(self.x, self.y, scaling)
-        self.data_known, self.data_pool = self.initial_sample(self.x, self.y, initial_samplesize)
+
+        if initial_samplesize > 0:
+            self.data_known, self.data_pool = self.initial_sample(self.x, self.y, initial_samplesize, sampling_method)
+        else:
+            self.data_known, self.data_pool = np.column_stack((self.x, self.y)), np.column_stack((self.x, self.y))
 
     def generate_data(self, start, end, n): # Generate synthetic data
         x = np.linspace(start, end, n)
@@ -73,14 +77,51 @@ class Dataprep:
         
         return x_normalized, y_normalized
 
-    def initial_sample(self, x, y, initial_samplesize): # Select the initial samples using K-Medoids clustering (probably needs to be updated using another method)
+    def initial_sample(self, x, y, initial_samplesize, sampling_method): # Select the initial samples using K-Medoids clustering (probably needs to be updated using another method)
+        
+        if sampling_method == 'LHC':
+            # scale the x values to the range [0, 1]
+            x_scaled = (x - np.min(x, axis=0)) / (np.max(x, axis=0) - np.min(x, axis=0))
+            # get the min and max values for every input feature 
+            minmax_values = [[np.min(x_scaled[:, i]), np.max(x_scaled[:, i])] for i in range(x_scaled.shape[1])]
+            minmax_values = np.array(minmax_values)
+            # define the lower and upper bounds for the LHC sampling
+            lower_bounds = minmax_values[:, 0]
+            upper_bounds = minmax_values[:, 1]
+            # generate the LHC samples
+            sampler = stats.qmc.LatinHypercube(d=len(minmax_values), optimization="random-cd", seed=42)
+            samples = sampler.random(initial_samplesize)
+            lower_bounds = minmax_values[:, 0]
+            upper_bounds = minmax_values[:, 1]
+            samples = stats.qmc.scale(samples, lower_bounds, upper_bounds)
 
-        indices = np.random.choice(len(x), initial_samplesize, replace=False)
+            # get the indices of the closest samples to the LHC samples (LHC normally operating in continuous space, so we need to find the closest samples in the discrete space of the data set)
+            indices = []
+            for sample in samples:
+                distances = np.linalg.norm(x_scaled - sample, axis=1)
+                # minimal distance is the maximum similarity
+                max_similarity_index = np.argmin(distances)
+                index_count = 0
+                # Check if the point is already in the matching_indices array
+                while max_similarity_index in indices:
+                    # Find the index of the second nearest point
+                    max_similarity_index = np.argsort(distances)[index_count]
+                    index_count += 1
+                
+                indices.append(max_similarity_index)
+            x_selected = x[indices]
+            y_selected = y[indices]
+            x_pool = np.delete(x, indices, axis=0)
+            y_pool = np.delete(y, indices, axis=0)
 
-        x_selected = x[indices]
-        y_selected = y[indices]
-        x_pool = np.delete(x, indices, axis=0)
-        y_pool = np.delete(y, indices, axis=0)
+        else:
+            indices = np.random.choice(len(x), initial_samplesize, replace=False)
+            x_selected = x[indices]
+            y_selected = y[indices]
+            x_pool = np.delete(x, indices, axis=0)
+            y_pool = np.delete(y, indices, axis=0)
+        
+
 
         if x.ndim == 1:
             plt.scatter(x, y, c="blue", label='Data points')

@@ -24,7 +24,7 @@ from Models.ExactGP import ExactGPModel
 
 
 class RunModel:
-    def __init__(self, model_name, hidden_size, layer_number, steps, epochs, dataset_type, sensor, scaling, samples_per_step, # 0. Initialize all parameters and dataset
+    def __init__(self, model_name, hidden_size, layer_number, steps, epochs, dataset_type, sensor, scaling, samples_per_step, sampling_method, # 0. Initialize all parameters and dataset
                  validation_size, learning_rate, active_learning, directory, verbose, run_name, complexity_weight, prior_sigma):
 
         # Configs
@@ -37,7 +37,7 @@ class RunModel:
         print('Run saved under:', log_dir)
 
         # Data parameters
-        self.data = Dataprep(dataset_type, sensor, scaling=scaling, initial_samplesize=samples_per_step)
+        self.data = Dataprep(dataset_type, sensor, scaling=scaling, initial_samplesize=samples_per_step, sampling_method=sampling_method)
         self.data_known, self.data_pool = self.data.data_known, self.data.data_pool
 
         # Active learning parameters
@@ -418,6 +418,7 @@ if __name__ == '__main__':
     parser.add_argument('-s', '--steps', type=int, default=2, help='Number of steps')
     parser.add_argument('-e', '--epochs', type=int, default=100, help='Number of epochs')
     parser.add_argument('-ss', '--samples_per_step', type=int, default=100, help='Samples to be selected per step and initial samplesize')
+    parser.add_argument('-sm', '--sampling_method', type=float, default='Random', help='Sampling method for initial samples. 1. Random, 2. LHC')
     parser.add_argument('-vs', '--validation_size', type=float, default=0, help='Size of the validation set in percentage')
     parser.add_argument('-t', '--topk', type=int, default=100, help='Number of top predictions to be selected')
     
@@ -437,7 +438,7 @@ if __name__ == '__main__':
                          for action in parser._actions if action.option_strings and action.option_strings[0] in opt_list]
     run_name = '_'.join(f"{abbr}{str(value)}" for abbr, value in option_value_list)
     
-    model = RunModel(args.model, args.hidden_size, args.layer_number, args.steps, args.epochs, args.dataset_type, args.sensor, args.scaling, args.samples_per_step, 
+    model = RunModel(args.model, args.hidden_size, args.layer_number, args.steps, args.epochs, args.dataset_type, args.sensor, args.scaling, args.samples_per_step, args.sampling_method,
                      args.validation_size, args.learning_rate, args.active_learning, args.directory, args.verbose, run_name, args.complexity_weight, args.prior_sigma)
 
     # Iterate through the steps of active learning
