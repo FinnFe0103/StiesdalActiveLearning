@@ -273,7 +273,6 @@ class RunModel:
             selected_indices = uncertainty.argsort()[-samples_per_step:] # Select the indices with the highest uncertainty
         elif self.active_learning == 'RS': # Random Sampling
             selected_indices = random.sample(range(len(self.data_pool)), samples_per_step)
-            return selected_indices
         elif self.active_learning == 'EI': # Expected Improvement
             z = (means - best_y) / stds
             ei = (means - best_y) * norm.cdf(z) + stds * norm.pdf(z)
@@ -285,8 +284,8 @@ class RunModel:
         elif self.active_learning == 'UCB': # Upper Confidence Bound
             ucb = means + 2.0 * stds
             selected_indices = ucb.squeeze().argsort()[-samples_per_step:] # Select the indices with the highest UCB
-        elif self.active_learning == 'EXPLOIT': # Exploitation only predcit topk
-            pass
+        elif self.active_learning == 'EXPLOIT': # Exploitation: next sample highest predictions
+            selected_indices = np.argsort(means)[-samples_per_step:]
         else:
             raise ValueError('Invalid acquisition function')
         
