@@ -21,11 +21,11 @@ from torch.utils.tensorboard import SummaryWriter
 from data import Dataprep, load_data
 from Models.BNN import BayesianNetwork
 from Models.ExactGP import ExactGPModel
-
+from Models.Ensemble import MLP
 
 class RunModel:
     def __init__(self, model_name, hidden_size, layer_number, steps, epochs, dataset_type, sensor, scaling, samples_per_step, # 0. Initialize all parameters and dataset
-                 validation_size, learning_rate, active_learning, directory, verbose, run_name, complexity_weight, prior_sigma):
+                 validation_size, learning_rate, active_learning, directory, verbose, run_name, complexity_weight, prior_sigma, ensemble_size):
 
         # Configs
         self.run_name = run_name # Name of the run
@@ -48,23 +48,26 @@ class RunModel:
 
         # Initialize the model and optimizer
         self.model_name = model_name # Name of the model
-        self.learning_rate = learning_rate # Learning rate for the optimizer
-        self.init_model(self.data_known.shape[1]-1, hidden_size, layer_number, prior_sigma) # Initialize the model
-        self.device = torch.device("mps" if torch.backends.mps.is_available() and self.model_name != "GP" else "cpu")
+        self.init_model(self.data_known.shape[1]-1, hidden_size, layer_number, prior_sigma, complexity_weight, ensemble_size, learning_rate) # Initialize the model
+        self.device = torch.device('mps' if torch.backends.mps.is_available() and self.model_name != 'GP' else 'cpu') #and self.model_name != 'DE' 
         print(f'Using {self.device} for training')
-        self.complexity_weight = complexity_weight # Complexity weight for ELBO
 
-    def init_model(self, input_dim, hidden_size, layer_number, prior_sigma): # 0.1 Initialize the model
+    def init_model(self, input_dim, hidden_size, layer_number, prior_sigma, complexity_weight, ensemble_size, learning_rate): # 0.1 Initialize the model
         if self.model_name == 'BNN':
+            self.complexity_weight = complexity_weight # Complexity weight for ELBO
             self.model = BayesianNetwork(input_dim, hidden_size, layer_number, prior_sigma)
-            self.init_optimizer_criterion(self.learning_rate) # Initialize the optimizer
+            self.init_optimizer_criterion(learning_rate) # Initialize the optimizer
         elif self.model_name == 'GP': # Model and optimizer are initialized in the training step
             self.model = None
             self.likelihood = None # Initialize the likelihood
             self.mll = None # Initialize the marginal log likelihood
         elif self.model_name == 'SVR':
             self.model = SVR(kernel='rbf', C=5, epsilon=0.05)
-            self.init_optimizer_criterion(self.learning_rate) # Initialize the optimizer
+            self.init_optimizer_criterion(learning_rate) # Initialize the optimizer
+        elif self.model_name == 'DE':
+            self.model = [MLP(input_dim, hidden_size, layer_number) for _ in range(ensemble_size)]
+            print(self.model)
+            self.init_optimizer_criterion(learning_rate) # Initialize the optimizer
     
     def init_optimizer_criterion(self, learning_rate): # 0.2 Initialize the optimizer
         if self.model_name == 'BNN':
@@ -76,6 +79,11 @@ class RunModel:
         elif self.model_name == 'SVR':
             self.optimizer = None # SVR does not have an optimizer
             self.criterion = mean_squared_error # MSE
+        elif self.model_name == 'DE':
+            self.optimizer = [Adam(model.parameters(), lr=learning_rate) for model in self.model]
+            self.criterion = torch.nn.MSELoss()
+            print(self.optimizer)
+            print(self.criterion)
     
     def train_model(self, step): # 1. Train the model
         # Split the pool data into train and validation sets
@@ -84,13 +92,13 @@ class RunModel:
             if self.model_name == 'GP' or self.model_name == 'SVR': # no train and val loader needed for GP/SVR, since not operating in batches
                 train_loader = train 
                 val_loader = val
-            elif self.model_name == 'BNN':
+            elif self.model_name == 'BNN' or self.model_name == 'DE':
                 train_loader = load_data(train)
                 val_loader = load_data(val)
         elif self.validation_size == 0:
             if self.model_name == 'GP' or self.model_name == 'SVR': # no train loader needed for GP/SVR, since not operating in batches
                 train_loader = self.data_known 
-            elif self.model_name == 'BNN':
+            elif self.model_name == 'BNN' or self.model_name == 'DE':
                 train_loader = load_data(self.data_known)
         else:
             raise ValueError('Invalid validation size')
@@ -165,6 +173,35 @@ class RunModel:
             if self.validation_size > 0:
                 self.evaluate_val_data(val_loader, step)
 
+        elif self.model_name == 'DE': # DE Training
+            model_epoch_loss = []
+            for model_idx in range(len(self.model)):
+                self.model[model_idx].to(self.device)
+                epoch_loss = []
+                for epoch in range(self.epochs):
+                    self.model[model_idx].train()
+                    
+                    total_train_loss = 0
+                    for x, y in train_loader:
+                        x, y = x.to(self.device), y.to(self.device)
+                        self.optimizer[model_idx].zero_grad()
+                        loss = self.criterion(self.model[model_idx](x), y.squeeze())
+                        loss.backward()
+                        self.optimizer[model_idx].step()
+                        total_train_loss += loss.item()
+                    epoch_loss.append(total_train_loss / len(train_loader))
+                print(epoch_loss)
+                model_epoch_loss.append(epoch_loss)
+            print(model_epoch_loss)
+            train_loss = sum(sublist[-1] for sublist in model_epoch_loss) / len(model_epoch_loss)
+            print(train_loss)
+            self.writer.add_scalar('loss/train', train_loss, step+1)
+            if self.verbose:
+                print(f'Step: {step+1} | Train-Loss: {train_loss:.4f}')
+
+            if self.validation_size > 0:
+                    self.evaluate_val_data(val_loader, step)
+
     def evaluate_val_data(self, val_loader, step): # 1.1 Evaluate the model on the validation set
         if self.model_name == 'BNN': # BNN-specific evaluation process
             self.model.eval()  # Set the model to evaluation mode
@@ -211,6 +248,27 @@ class RunModel:
             if self.verbose:
                 print(f'Step: {step+1} | Val-Loss: {loss:.4f}')
         
+        elif self.model_name == 'DE': # DE-specific evaluation process
+            total_val_loss = 0
+            for model in self.model:
+                model.eval()
+                model.to(self.device)
+                model_val_loss = 0
+                with torch.no_grad():
+                    for x, y in val_loader:
+                        x, y = x.to(self.device), y.to(self.device)
+                        loss = self.criterion(model(x), y.squeeze())
+                        model_val_loss += loss.item()
+
+                model_step_val_loss = model_val_loss / len(val_loader) # Average loss over batches for one model
+                print(f'Model Val-Loss: {model_step_val_loss:.4f}')
+                total_val_loss += model_step_val_loss
+            
+            step_val_loss = total_val_loss / len(self.model) # Average loss over models
+            self.writer.add_scalar('loss/val', step_val_loss, step+1)
+            if self.verbose:
+                print(f'Step: {step+1} | Val-Loss: {step_val_loss:.4f}')
+
     def evaluate_pool_data(self, step): # 2. Evaluate the model on the pool data
         # Convert pool data to PyTorch tensors and move them to the correct device
         x_pool_torch = torch.tensor(self.data_pool[:, :-1]).to(self.device)
@@ -232,6 +290,13 @@ class RunModel:
         elif self.model_name == 'SVR':
             predictions = self.model.predict(self.data_pool[:, :-1])
             loss = self.criterion(predictions, self.data_pool[:, -1])
+        elif self.model_name == 'DE':
+            for model in self.model:
+                model.eval()
+            with torch.no_grad():
+                predictions = [model(x_pool_torch).clone().detach().cpu().numpy() for model in self.model]
+                predictions = np.mean(predictions, axis=0)
+                loss = self.criterion(torch.tensor(predictions).to(self.device), y_pool_torch.squeeze())
             
         # Log the loss to TensorBoard
         self.writer.add_scalar('loss/pool', loss.item(), step + 1)
@@ -262,6 +327,25 @@ class RunModel:
         elif self.model_name == 'SVR':
             means = self.model.predict(x_pool)
             stds = np.zeros_like(means)
+        elif self.model_name == 'DE':
+            for model in self.model:
+                model.eval()
+            with torch.no_grad():
+                preds = [model(x_pool_torch).clone().detach().cpu().numpy() for model in self.model]
+                means = np.mean(preds, axis=0)
+                stds = np.std(preds, axis=0)
+
+            ##########################################
+
+            # Plotting
+            fig, ax = plt.subplots(figsize=(8, 6), dpi=120)
+            for idx in range(len(preds)):
+                print(x_pool_torch.cpu().shape, preds[idx].shape)
+                ax.scatter(x_pool_torch.cpu().squeeze(), preds[idx])
+            ax.scatter(self.data_pool[:, :-1], self.data_pool[:, -1], c='red', marker='*', alpha=0.1)
+            plt.show()
+
+            ##########################################
 
         return means, stds  # Return both the mean and standard deviation of predictions
 
@@ -360,7 +444,6 @@ class RunModel:
                 preds = [self.model(x_total_torch) for _ in range(samples)]
             preds = torch.stack(preds)
             means = preds.mean(dim=0).detach().cpu().numpy().squeeze()
-            highest_indices_pred = np.argsort(means)[-topk:]
         elif self.model_name == 'GP':
             self.model.eval()
             with torch.no_grad(), gpytorch.settings.fast_pred_var():
@@ -368,10 +451,13 @@ class RunModel:
                 preds = self.model(x_total_torch)
                 observed_pred = self.likelihood(preds)
             means = observed_pred.mean.numpy()
-            highest_indices_pred = np.argsort(means)[-topk:]
         elif self.model_name == 'SVR':
             means = self.model.predict(x_total)
-            highest_indices_pred = np.argsort(means)[-topk:]
+        elif self.model_name == 'DE':
+            preds = [model(x_total_torch).clone().detach().cpu().numpy() for model in self.model]
+            means = np.mean(preds, axis=0)
+            
+        highest_indices_pred = np.argsort(means)[-topk:]
 
         x_highest_pred = x_total[highest_indices_pred]
         y_highest_pred = y_total[highest_indices_pred]
@@ -399,7 +485,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Run the BNN model')
 
     # Dataset parameters
-    parser.add_argument('-ds', '--dataset_type', type=str, default='Generated_2000', help='1. Generated_2000, 2. Caselist')
+    parser.add_argument('-ds', '--dataset_type', type=str, default='Caselist', help='1. Generated_2000, 2. Caselist')
     parser.add_argument('-sc', '--scaling', type=str, default='Standard', help='Scaling to be used: 1. Standard, 2. Minmax, 3. None')
     parser.add_argument('-se', '--sensor', type=str, default='foundation_origin xy FloaterOffset [m]', help='Sensor to be predicted')
     
@@ -408,10 +494,15 @@ if __name__ == '__main__':
     parser.add_argument('-lr', '--learning_rate', type=float, default=0.01, help='Learning rate')
     
     # BNN
-    parser.add_argument('-hs', '--hidden_size', type=int, default=4, help='Number of hidden units')
-    parser.add_argument('-ln', '--layer_number', type=int, default=3, help='Number of layers')
     parser.add_argument('-ps', '--prior_sigma', type=float, default=0.0000001, help='Prior sigma')
     parser.add_argument('-cw', '--complexity_weight', type=float, default=0.01, help='Complexity weight')
+
+    # DE
+    parser.add_argument('-es', '--ensemble_size', type=int, default=5, help='Number of models in the ensemble')
+
+    # NNs
+    parser.add_argument('-hs', '--hidden_size', type=int, default=4, help='Number of hidden units')
+    parser.add_argument('-ln', '--layer_number', type=int, default=3, help='Number of layers')
 
     # Active learning parameters
     parser.add_argument('-al', '--active_learning', type=str, default='UCB', help='Type of active learning/acquisition function: 1. US, 2. RS, 3. EI, 4. PI, 5. UCB') # Uncertainty, Random, Expected Improvement, Probability of Improvement, Upper Confidence Bound
@@ -433,12 +524,14 @@ if __name__ == '__main__':
         opt_list = ['-sc', '-lr', '-al', '-s', '-e', '-ss', '-vs']
     elif args.model == 'SVR':
         opt_list = ['-sc', '-lr', '-al', '-s', '-e', '-ss', '-vs']
+    elif args.model == 'DE':
+        opt_list = ['-sc', '-hs', '-ln', '-lr', '-al', '-s', '-e', '-ss', '-vs', '-es']
     option_value_list = [(action.option_strings[0].lstrip('-'), getattr(args, action.dest)) 
                          for action in parser._actions if action.option_strings and action.option_strings[0] in opt_list]
     run_name = '_'.join(f"{abbr}{str(value)}" for abbr, value in option_value_list)
     
     model = RunModel(args.model, args.hidden_size, args.layer_number, args.steps, args.epochs, args.dataset_type, args.sensor, args.scaling, args.samples_per_step, 
-                     args.validation_size, args.learning_rate, args.active_learning, args.directory, args.verbose, run_name, args.complexity_weight, args.prior_sigma)
+                     args.validation_size, args.learning_rate, args.active_learning, args.directory, args.verbose, run_name, args.complexity_weight, args.prior_sigma, args.ensemble_size)
 
     # Iterate through the steps of active learning
     for step in range(model.steps):
@@ -454,6 +547,6 @@ if __name__ == '__main__':
         print(f'Updated pool and known data (AL = {args.active_learning}):', model.data_pool.shape, model.data_known.shape)
         print(f'Step: {step+1} of {model.steps} | {time.time() - start_step:.2f} seconds')
 
-# BNN: -v -ln 3 -hs 4 -ps 0.0000001 -cw 0.01 -dr v1 -al
-#      -v -ln 3 -hs 4 -ps 0.0000001 -cw 0.001 -dr v1 -al UCB -s 5 -e 100
-# GP Demo: -v -m GP -sc Minmax -lr 0.1 -al US -s 10 -e 10 -ss 25 -vs 0.2
+# BNN: -v -ln 3 -hs 4 -ps 0.0000001 -cw 0.001 -dr v1 -al UCB -s 5 -e 100
+# GP: -v -m GP -sc Minmax -lr 0.1 -al US -s 10 -e 10 -ss 25 -vs 0.2
+# DE: -v -m DE -vs 0.2 -es 2
