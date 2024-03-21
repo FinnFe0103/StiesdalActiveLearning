@@ -418,7 +418,7 @@ if __name__ == '__main__':
     parser.add_argument('-s', '--steps', type=int, default=2, help='Number of steps')
     parser.add_argument('-e', '--epochs', type=int, default=100, help='Number of epochs')
     parser.add_argument('-ss', '--samples_per_step', type=int, default=100, help='Samples to be selected per step and initial samplesize')
-    parser.add_argument('-sm', '--sampling_method', type=float, default='Random', help='Sampling method for initial samples. 1. Random, 2. LHC')
+    parser.add_argument('-sm', '--sampling_method', type=str, default='Random', help='Sampling method for initial samples. 1. Random, 2. LHC')
     parser.add_argument('-vs', '--validation_size', type=float, default=0, help='Size of the validation set in percentage')
     parser.add_argument('-t', '--topk', type=int, default=100, help='Number of top predictions to be selected')
     
