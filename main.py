@@ -248,8 +248,21 @@ class RunModel:
         if self.active_learning:
             uncertainty = stds.squeeze() # Uncertainty is the standard deviation of the predictions
             selected_indices = uncertainty.argsort()[-samples_per_step:] # Select the indices with the highest uncertainty
-            return selected_indices
-            
+        elif self.active_learning == 'RS': # Random Sampling
+            selected_indices = random.sample(range(len(self.data_pool)), samples_per_step)
+        elif self.active_learning == 'EI': # Expected Improvement
+            z = (means - best_y) / stds
+            ei = (means - best_y) * norm.cdf(z) + stds * norm.pdf(z)
+            selected_indices = ei.squeeze().argsort()[-samples_per_step:] # Select the indices with the highest EI
+        elif self.active_learning == 'PI': # Probability of Improvement
+            z = (means - best_y) / stds
+            pi = norm.cdf(z)
+            selected_indices = pi.squeeze().argsort()[-samples_per_step:] # Select the indices with the highest PI
+        elif self.active_learning == 'UCB': # Upper Confidence Bound
+            ucb = means + 2.0 * stds
+            selected_indices = ucb.squeeze().argsort()[-samples_per_step:] # Select the indices with the highest UCB
+        elif self.active_learning == 'EX': # Exploitation: next sample highest predictions
+            selected_indices = np.argsort(means)[-samples_per_step:]
         else:
             selected_indices = random.sample(range(len(self.pool_data)), samples_per_step)
             return selected_indices
@@ -360,7 +373,7 @@ if __name__ == '__main__':
     parser.add_argument('-cw', '--complexity_weight', type=float, default=0.01, help='Complexity weight')
 
     # Active learning parameters
-    parser.add_argument('-al', '--active_learning', action='store_true', help='Use active learning (AL) or random sampling (RS)')
+    parser.add_argument('-al', '--active_learning', type=str, default='UCB', help='Type of active learning/acquisition function: 1. US, 2. RS, 3. EI, 4. PI, 5. UCB') # Uncertainty, Random, Expected Improvement, Probability of Improvement, Upper Confidence Bound
     parser.add_argument('-s', '--steps', type=int, default=2, help='Number of steps')
     parser.add_argument('-e', '--epochs', type=int, default=100, help='Number of epochs')
     parser.add_argument('-ss', '--samples_per_step', type=int, default=100, help='Samples to be selected per step and initial samplesize')
