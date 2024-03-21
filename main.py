@@ -268,10 +268,10 @@ class RunModel:
     def acquisition_function(self, means, stds, samples_per_step): # 4. Select the next samples from the pool
         best_y = np.max(self.data_known[:, -1])
         
-        if self.active_learning == 'US':
+        if self.active_learning == 'US': # Uncertainty Sampling
             uncertainty = stds.squeeze() # Uncertainty is the standard deviation of the predictions
             selected_indices = uncertainty.argsort()[-samples_per_step:] # Select the indices with the highest uncertainty
-        elif self.active_learning == 'RS':
+        elif self.active_learning == 'RS': # Random Sampling
             selected_indices = random.sample(range(len(self.data_pool)), samples_per_step)
             return selected_indices
         elif self.active_learning == 'EI': # Expected Improvement
@@ -285,6 +285,8 @@ class RunModel:
         elif self.active_learning == 'UCB': # Upper Confidence Bound
             ucb = means + 2.0 * stds
             selected_indices = ucb.squeeze().argsort()[-samples_per_step:] # Select the indices with the highest UCB
+        elif self.active_learning == 'EXPLOIT': # Exploitation only predcit topk
+            pass
         else:
             raise ValueError('Invalid acquisition function')
         
@@ -303,6 +305,7 @@ class RunModel:
             x_selected = pca.transform(x_selected) # [observations, 1]
             x_highest_pred = pca.transform(x_highest_pred) # [observations, 1]
             x_highest_actual = pca.transform(x_highest_actual) # [observations, 1]
+            print('Explained variance by the first princiapal components:', pca.explained_variance_ratio_)
             pca_applied = True
             
         x_pool_selected = x_pool[selected_indices] # [observations, 1]
@@ -390,7 +393,7 @@ class RunModel:
         print(f'Number of predictions from pool: {num_from_pool} | Number of predictions from known data: {num_from_known}')
 
         return x_highest_pred, y_highest_pred, x_highest_actual, y_highest_actual
-    
+
 
 if __name__ == '__main__':
 
