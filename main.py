@@ -21,7 +21,8 @@ from torch.utils.tensorboard import SummaryWriter
 from data import Dataprep, load_data
 from Models.BNN import BayesianNetwork
 from Models.ExactGP import ExactGPModel
-from Models.Ensemble import MLP
+from Models.Ensemble import Ensemble
+from Models.Dropout import Dropout
 
 class RunModel:
     def __init__(self, model_name, hidden_size, layer_number, steps, epochs, dataset_type, sensor, scaling, samples_per_step, # 0. Initialize all parameters and dataset
@@ -47,43 +48,47 @@ class RunModel:
         self.validation_size = validation_size # Size of the validation set in percentage
 
         # Initialize the model and optimizer
+        self.learning_rate = learning_rate # Learning rate for the optimizer
         self.model_name = model_name # Name of the model
-        self.init_model(self.data_known.shape[1]-1, hidden_size, layer_number, prior_sigma, complexity_weight, ensemble_size, learning_rate) # Initialize the model
+        self.init_model(self.data_known.shape[1]-1, hidden_size, layer_number, prior_sigma, complexity_weight, ensemble_size) # Initialize the model
         self.device = torch.device('mps' if torch.backends.mps.is_available() and self.model_name != 'GP' else 'cpu') #and self.model_name != 'DE' 
         print(f'Using {self.device} for training')
 
-    def init_model(self, input_dim, hidden_size, layer_number, prior_sigma, complexity_weight, ensemble_size, learning_rate): # 0.1 Initialize the model
+    def init_model(self, input_dim, hidden_size, layer_number, prior_sigma, complexity_weight, ensemble_size): # 0.1 Initialize the model
         if self.model_name == 'BNN':
             self.complexity_weight = complexity_weight # Complexity weight for ELBO
             self.model = BayesianNetwork(input_dim, hidden_size, layer_number, prior_sigma)
-            self.init_optimizer_criterion(learning_rate) # Initialize the optimizer
+            self.init_optimizer_criterion() # Initialize the optimizer
         elif self.model_name == 'GP': # Model and optimizer are initialized in the training step
             self.model = None
             self.likelihood = None # Initialize the likelihood
             self.mll = None # Initialize the marginal log likelihood
         elif self.model_name == 'SVR':
             self.model = SVR(kernel='rbf', C=5, epsilon=0.05)
-            self.init_optimizer_criterion(learning_rate) # Initialize the optimizer
+            self.init_optimizer_criterion() # Initialize the optimizer
         elif self.model_name == 'DE':
-            self.model = [MLP(input_dim, hidden_size, layer_number) for _ in range(ensemble_size)]
-            print(self.model)
-            self.init_optimizer_criterion(learning_rate) # Initialize the optimizer
+            self.model = [Ensemble(input_dim, hidden_size, layer_number) for _ in range(ensemble_size)]
+            self.init_optimizer_criterion() # Initialize the optimizer
+        elif self.model_name == 'MCD':
+            self.model = Dropout(input_dim, hidden_size, layer_number)
+            self.init_optimizer_criterion()
     
-    def init_optimizer_criterion(self, learning_rate): # 0.2 Initialize the optimizer
+    def init_optimizer_criterion(self): # 0.2 Initialize the optimizer
         if self.model_name == 'BNN':
-            self.optimizer = Adam(self.model.parameters(), lr=learning_rate)
+            self.optimizer = Adam(self.model.parameters(), lr=self.learning_rate)
             self.criterion = torch.nn.MSELoss() # MSE
         elif self.model_name == 'GP':
-            self.optimizer = Adam(self.model.parameters(), lr=learning_rate)
+            self.optimizer = Adam(self.model.parameters(), lr=self.learning_rate)
             self.criterion = torch.nn.MSELoss() # MSE
         elif self.model_name == 'SVR':
             self.optimizer = None # SVR does not have an optimizer
             self.criterion = mean_squared_error # MSE
         elif self.model_name == 'DE':
-            self.optimizer = [Adam(model.parameters(), lr=learning_rate) for model in self.model]
+            self.optimizer = [Adam(model.parameters(), lr=self.learning_rate) for model in self.model]
             self.criterion = torch.nn.MSELoss()
-            print(self.optimizer)
-            print(self.criterion)
+        elif self.model_name == 'MCD':
+            self.optimizer = Adam(self.model.parameters(), lr=self.learning_rate)
+            self.criterion = torch.nn.MSELoss()
     
     def train_model(self, step): # 1. Train the model
         # Split the pool data into train and validation sets
@@ -92,20 +97,19 @@ class RunModel:
             if self.model_name == 'GP' or self.model_name == 'SVR': # no train and val loader needed for GP/SVR, since not operating in batches
                 train_loader = train 
                 val_loader = val
-            elif self.model_name == 'BNN' or self.model_name == 'DE':
+            elif self.model_name == 'BNN' or self.model_name == 'DE' or self.model_name == 'MCD':
                 train_loader = load_data(train)
                 val_loader = load_data(val)
         elif self.validation_size == 0:
             if self.model_name == 'GP' or self.model_name == 'SVR': # no train loader needed for GP/SVR, since not operating in batches
                 train_loader = self.data_known 
-            elif self.model_name == 'BNN' or self.model_name == 'DE':
+            elif self.model_name == 'BNN' or self.model_name == 'DE' or self.model_name == 'MCD':
                 train_loader = load_data(self.data_known)
         else:
             raise ValueError('Invalid validation size')
 
         if self.model_name == 'BNN': # BNN Training
             self.model.to(self.device) # move the model to the configured device
-
             for epoch in range(self.epochs):
                 start_epoch = time.time()
                 self.model.train()
@@ -113,19 +117,12 @@ class RunModel:
                 for x, y in train_loader:
                     x, y = x.to(self.device), y.to(self.device)
                     self.optimizer.zero_grad()
-
                     loss = self.model.sample_elbo(inputs=x, labels=y,
                                                 criterion=self.criterion, sample_nbr=1,
                                                 complexity_cost_weight=self.complexity_weight) #0.01/len(train_loader.dataset)
                     loss.backward()
                     self.optimizer.step()
                     total_train_loss += loss.item()
-
-                # Log model parameters
-                for name, param in self.model.named_parameters():
-                    self.writer.add_histogram(f'{name}', param, epoch)
-                    if param.grad is not None:
-                        self.writer.add_histogram(f'{name}.grad', param.grad, epoch)
 
                 # Average loss for the current epoch
                 epoch_train_loss = total_train_loss / len(train_loader) # Average loss over batches
@@ -144,7 +141,7 @@ class RunModel:
             self.likelihood = gpytorch.likelihoods.GaussianLikelihood().to(self.device)
             self.likelihood.noise = 0.01 #hyperparameter
             self.model = ExactGPModel(X_train, y_train, self.likelihood).to(self.device)
-            self.init_optimizer_criterion(self.learning_rate)
+            self.init_optimizer_criterion()
 
             self.model.train()
             self.likelihood.train()
@@ -162,7 +159,6 @@ class RunModel:
                 if self.verbose:
                     print(f'Step: {step+1} | Epoch: {epoch+1} of {self.epochs} | Train-Loss: {train_loss:.4f} | Lengthscale: {self.model.covar_module.base_kernel.lengthscale.item():.3f} | Noise: {self.likelihood.noise.item():.3f} | {time.time() - start_epoch:.2f} seconds')
                 
-
             if self.validation_size > 0:
                 # Evaluation step here, assuming evaluate_model method exists
                 self.evaluate_val_data(val_loader, step)
@@ -190,11 +186,8 @@ class RunModel:
                         self.optimizer[model_idx].step()
                         total_train_loss += loss.item()
                     epoch_loss.append(total_train_loss / len(train_loader))
-                print(epoch_loss)
                 model_epoch_loss.append(epoch_loss)
-            print(model_epoch_loss)
             train_loss = sum(sublist[-1] for sublist in model_epoch_loss) / len(model_epoch_loss)
-            print(train_loss)
             self.writer.add_scalar('loss/train', train_loss, step+1)
             if self.verbose:
                 print(f'Step: {step+1} | Train-Loss: {train_loss:.4f}')
@@ -202,10 +195,32 @@ class RunModel:
             if self.validation_size > 0:
                     self.evaluate_val_data(val_loader, step)
 
+        elif self.model_name == 'MCD': # MCD Training
+            self.model.to(self.device)
+            for epoch in range(self.epochs):
+                start_epoch = time.time()
+                self.model.train()
+                total_train_loss = 0
+                for x, y in train_loader:
+                    x, y = x.to(self.device), y.to(self.device)
+                    self.optimizer.zero_grad()
+                    loss = self.criterion(self.model(x), y.squeeze())
+                    loss.backward()
+                    self.optimizer.step()
+                    total_train_loss += loss.item()
+
+                # Average loss for the current epoch
+                epoch_train_loss = total_train_loss / len(train_loader) # Average loss over batches
+                self.writer.add_scalar('loss/train', epoch_train_loss, step*self.epochs+epoch+1)
+                if self.verbose:
+                    print(f'Step: {step+1} | Epoch: {epoch+1} of {self.epochs} | Train-Loss: {epoch_train_loss:.4f} | {time.time() - start_epoch:.2f} seconds')
+
+            if self.validation_size > 0:
+                self.evaluate_val_data(val_loader, step) # Evaluate the model on the validation set
+
     def evaluate_val_data(self, val_loader, step): # 1.1 Evaluate the model on the validation set
         if self.model_name == 'BNN': # BNN-specific evaluation process
             self.model.eval()  # Set the model to evaluation mode
-            
             total_val_loss = 0
             with torch.no_grad():  # Inference mode, gradients not required
                 for x, y in val_loader:
@@ -252,7 +267,6 @@ class RunModel:
             total_val_loss = 0
             for model in self.model:
                 model.eval()
-                model.to(self.device)
                 model_val_loss = 0
                 with torch.no_grad():
                     for x, y in val_loader:
@@ -261,10 +275,24 @@ class RunModel:
                         model_val_loss += loss.item()
 
                 model_step_val_loss = model_val_loss / len(val_loader) # Average loss over batches for one model
-                print(f'Model Val-Loss: {model_step_val_loss:.4f}')
+                #print(f'Model Val-Loss: {model_step_val_loss:.4f}')
                 total_val_loss += model_step_val_loss
             
             step_val_loss = total_val_loss / len(self.model) # Average loss over models
+            self.writer.add_scalar('loss/val', step_val_loss, step+1)
+            if self.verbose:
+                print(f'Step: {step+1} | Val-Loss: {step_val_loss:.4f}')
+
+        elif self.model_name == 'MCD': # MCD-specific evaluation process
+            #self.model.eval() # DO NOT PUT IN EVALUATION MODE; OTHERWISE DROPOUT WILL NOT WORK
+            total_val_loss = 0
+            with torch.no_grad():
+                for x, y in val_loader:
+                    x, y = x.to(self.device), y.to(self.device)
+                    loss = self.criterion(self.model(x), y.squeeze())
+                    total_val_loss += loss.item()
+
+            step_val_loss = total_val_loss / len(val_loader) # Average loss over batches
             self.writer.add_scalar('loss/val', step_val_loss, step+1)
             if self.verbose:
                 print(f'Step: {step+1} | Val-Loss: {step_val_loss:.4f}')
@@ -297,6 +325,11 @@ class RunModel:
                 predictions = [model(x_pool_torch).clone().detach().cpu().numpy() for model in self.model]
                 predictions = np.mean(predictions, axis=0)
                 loss = self.criterion(torch.tensor(predictions).to(self.device), y_pool_torch.squeeze())
+        elif self.model_name == 'MCD':
+            #self.model.eval()  # DO NOT PUT IN EVALUATION MODE; OTHERWISE DROPOUT WILL NOT WORK
+            with torch.no_grad():
+                predictions = self.model(x_pool_torch)
+                loss = self.criterion(predictions, y_pool_torch.squeeze())
             
         # Log the loss to TensorBoard
         self.writer.add_scalar('loss/pool', loss.item(), step + 1)
@@ -334,16 +367,26 @@ class RunModel:
                 preds = [model(x_pool_torch).clone().detach().cpu().numpy() for model in self.model]
                 means = np.mean(preds, axis=0)
                 stds = np.std(preds, axis=0)
+        elif self.model_name == 'MCD':
+            #self.model.eval() # DO NOT PUT IN EVALUATION MODE; OTHERWISE DROPOUT WILL NOT WORK
+            with torch.no_grad():
+                preds = [self.model(x_pool_torch) for _ in range(samples)]
+            preds = torch.stack(preds)
+            means = preds.mean(dim=0).detach().cpu().numpy()
+            stds = preds.std(dim=0).detach().cpu().numpy()
+            print(stds)
+            print(stds.shape)
+
 
             ##########################################
 
-            # Plotting
-            fig, ax = plt.subplots(figsize=(8, 6), dpi=120)
-            for idx in range(len(preds)):
-                print(x_pool_torch.cpu().shape, preds[idx].shape)
-                ax.scatter(x_pool_torch.cpu().squeeze(), preds[idx])
-            ax.scatter(self.data_pool[:, :-1], self.data_pool[:, -1], c='red', marker='*', alpha=0.1)
-            plt.show()
+            # # Plotting
+            # fig, ax = plt.subplots(figsize=(8, 6), dpi=120)
+            # for idx in range(len(preds)):
+            #     print(x_pool_torch.cpu().shape, preds[idx].shape)
+            #     ax.scatter(x_pool_torch.cpu().squeeze(), preds[idx])
+            # ax.scatter(self.data_pool[:, :-1], self.data_pool[:, -1], c='red', marker='*', alpha=0.1)
+            # plt.show()
 
             ##########################################
 
@@ -388,7 +431,7 @@ class RunModel:
             x_selected = pca.transform(x_selected) # [observations, 1]
             x_highest_pred = pca.transform(x_highest_pred) # [observations, 1]
             x_highest_actual = pca.transform(x_highest_actual) # [observations, 1]
-            print('Explained variance by the first princiapal components:', pca.explained_variance_ratio_)
+            #print('Explained variance by the first princiapal components:', pca.explained_variance_ratio_)
             pca_applied = True
             
         x_pool_selected = x_pool[selected_indices] # [observations, 1]
@@ -432,7 +475,7 @@ class RunModel:
         self.data_known = np.append(self.data_known, self.data_pool[selected_indices], axis=0)
         self.data_pool = np.delete(self.data_pool, selected_indices, axis=0)
 
-    def final_prediction(self, topk, samples=500):
+    def final_prediction(self, topk, samples=100):
         x_total = np.concatenate((self.data_pool[:, :-1], self.data_known[:, :-1]), axis=0)
         y_total = np.concatenate((self.data_pool[:, -1], self.data_known[:, -1]), axis=0)
         
@@ -454,8 +497,17 @@ class RunModel:
         elif self.model_name == 'SVR':
             means = self.model.predict(x_total)
         elif self.model_name == 'DE':
-            preds = [model(x_total_torch).clone().detach().cpu().numpy() for model in self.model]
+            for model in self.model:
+                model.eval()
+            with torch.no_grad():
+                preds = [model(x_total_torch).clone().detach().cpu().numpy() for model in self.model]
             means = np.mean(preds, axis=0)
+        elif self.model_name == 'MCD':
+            #self.model.eval() # DO NOT PUT IN EVALUATION MODE; OTHERWISE DROPOUT WILL NOT WORK
+            with torch.no_grad():
+                preds = [self.model(x_total_torch) for _ in range(samples)]
+            preds = torch.stack(preds)
+            means = preds.mean(dim=0).detach().cpu().numpy()
             
         highest_indices_pred = np.argsort(means)[-topk:]
 
@@ -526,6 +578,8 @@ if __name__ == '__main__':
         opt_list = ['-sc', '-lr', '-al', '-s', '-e', '-ss', '-vs']
     elif args.model == 'DE':
         opt_list = ['-sc', '-hs', '-ln', '-lr', '-al', '-s', '-e', '-ss', '-vs', '-es']
+    elif args.model == 'MCD':
+        opt_list = ['-sc', '-hs', '-ln', '-lr', '-al', '-s', '-e', '-ss', '-vs']
     option_value_list = [(action.option_strings[0].lstrip('-'), getattr(args, action.dest)) 
                          for action in parser._actions if action.option_strings and action.option_strings[0] in opt_list]
     run_name = '_'.join(f"{abbr}{str(value)}" for abbr, value in option_value_list)
@@ -546,6 +600,7 @@ if __name__ == '__main__':
 
         print(f'Updated pool and known data (AL = {args.active_learning}):', model.data_pool.shape, model.data_known.shape)
         print(f'Step: {step+1} of {model.steps} | {time.time() - start_step:.2f} seconds')
+        print('--------------------------------')
 
 # BNN: -v -ln 3 -hs 4 -ps 0.0000001 -cw 0.001 -dr v1 -al UCB -s 5 -e 100
 # GP: -v -m GP -sc Minmax -lr 0.1 -al US -s 10 -e 10 -ss 25 -vs 0.2
