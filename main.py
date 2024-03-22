@@ -1,5 +1,6 @@
 import os
 #os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
+import linear_operator
 import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
@@ -21,6 +22,7 @@ from torch.utils.tensorboard import SummaryWriter
 from data import Dataprep, load_data
 from Models.BNN import BayesianNetwork
 from Models.ExactGP import ExactGPModel
+import sys
 
 
 class RunModel:
@@ -92,14 +94,15 @@ class RunModel:
             self.optimizer = None # SVR does not have an optimizer
             self.criterion = mean_squared_error # MSE
 
-    def init_kernel(self, kernel_type, input_dim, lengthscale_prior=None, lengthscale_sigma=None, lengthscale_mean=None, lengthscale_type=None):
+
+    def create_single_kernel(self, kernel_type, input_dim):
         # If ARD is True, the kernel has a different lengthscale for each input dimension
-        if lengthscale_type == 'ARD':
+        if self.lengthscale_type == 'ARD':
             ard_num_dims = input_dim
         else:
             ard_num_dims = None
 
-        # Initialize the specified kernel type
+        # Function to initialize a single kernel based on the type
         if kernel_type == 'RBF':
             kernel = gpytorch.kernels.RBFKernel(ard_num_dims=ard_num_dims)
         elif kernel_type == 'Matern':
@@ -111,24 +114,48 @@ class RunModel:
         elif kernel_type == 'Periodic':
             kernel = gpytorch.kernels.PeriodicKernel()
         else:
-            raise ValueError('Invalid kernel type')
+            raise ValueError(f'Invalid kernel type: {kernel_type}')
 
-        # Apply a lengthscale prior if provided
-        if lengthscale_prior is not None and lengthscale_sigma is not None and lengthscale_mean is not None:
+        # Apply lengthscale prior if specified
+        if self.lengthscale_prior is not None and hasattr(kernel, 'lengthscale'):
             if lengthscale_prior == 'Normal':
-                lengthscale_prior = gpytorch.priors.NormalPrior(lengthscale_mean, lengthscale_sigma)
+                lengthscale_prior = gpytorch.priors.NormalPrior(self.lengthscale_mean, self.lengthscale_sigma)
             elif lengthscale_prior == 'Gamma':
-                lengthscale_prior = gpytorch.priors.GammaPrior(lengthscale_mean, lengthscale_sigma)
+                lengthscale_prior = gpytorch.priors.GammaPrior(self.lengthscale_mean, self.lengthscale_sigma)
                 kernel.lengthscale_constraint = gpytorch.constraints.Positive()
             else:
                 raise ValueError('Invalid prior type')
 
             kernel.register_prior("lengthscale_prior", lengthscale_prior, "lengthscale")
-        elif lengthscale_sigma is not None and kernel_type not in ['Linear', 'Cosine', 'Periodic', 'SpectralMixture']:
-            kernel.lengthscale = lengthscale_sigma
-
+            
+        # Apply lengthscale if specified
+        elif self.lengthscale_sigma is not None and not hasattr(kernel, 'lengthscale'):
+            kernel.lengthscale = self.lengthscale_sigma
+        
         return kernel
 
+    def init_kernel(self, kernel_types, input_dim):
+        # Initialize an empty list to hold the individual kernels
+        kernels = []
+
+        # Loop through the list of kernel types provided and initialize each
+        for kernel_type in kernel_types.split('+'):  # Assume kernel_types is a string like "RBF+Linear" or "RBF*Periodic"
+            if '*' in kernel_type:  # Handle multiplicative combinations
+                subkernels = kernel_type.split('*')
+                kernel_product = None
+                for subkernel_type in subkernels:
+                    subkernel = self.create_single_kernel(subkernel_type.strip(), input_dim)
+                    kernel_product = subkernel if kernel_product is None else kernel_product * subkernel
+                kernels.append(kernel_product)
+            else:
+                kernels.append(self.create_single_kernel(kernel_type.strip(), input_dim))
+        
+        # Combine the kernels
+        combined_kernel = None
+        for kernel in kernels:
+            combined_kernel = kernel if combined_kernel is None else combined_kernel + kernel
+
+        return combined_kernel
     
     def init_noise(self, noise_prior, noise_sigma=None, noise_mean=None, noise_constraint=1e-6): # 0.4 Initialize the noise
         if noise_prior is not None and noise_sigma is not None and noise_mean is not None:
@@ -216,7 +243,7 @@ class RunModel:
                 self.likelihood = gpytorch.likelihoods.GaussianLikelihood()
 
             # Kernel
-            self.kernel = self.init_kernel(self.kernel_type, X_train.shape[1], self.lengthscale_prior, self.lengthscale_sigma, self.lengthscale_mean, self.lengthscale_type)
+            self.kernel = self.init_kernel(self.kernel_type, X_train.shape[1])
             # Model
             self.model = ExactGPModel(X_train, y_train, self.likelihood, self.kernel)
             # Optimizer
@@ -228,18 +255,22 @@ class RunModel:
             self.model.train()
             self.likelihood.train()
 
-            for epoch in range(self.epochs):
-                start_epoch = time.time()
-                self.optimizer.zero_grad()
-                output = self.model(X_train)
-                train_loss = -self.mll(output, y_train) 
-                train_loss.backward()
-                self.optimizer.step()
+            try:
+                for epoch in range(self.epochs):
+                    start_epoch = time.time()
+                    self.optimizer.zero_grad()
+                    output = self.model(X_train)
+                    train_loss = -self.mll(output, y_train) 
+                    train_loss.backward()
+                    self.optimizer.step()
 
-                self.writer.add_scalar('loss/train', train_loss, step*self.epochs+epoch+1)
-                if self.verbose:
-                    #print(f'Step: {step+1} | Epoch: {epoch+1} of {self.epochs} | Train-Loss: {train_loss:.4f} | Lengthscale: {self.model.covar_module.base_kernel.lengthscale.mean().item():.3f} | Noise: {self.likelihood.noise.item():.3f} | {time.time() - start_epoch:.2f} seconds')
-                    print(f'Step: {step+1} | Epoch: {epoch+1} of {self.epochs} | Train-Loss: {train_loss:.4f}  | Noise: {self.likelihood.noise.item():.3f} | {time.time() - start_epoch:.2f} seconds')
+                    self.writer.add_scalar('loss/train', train_loss, step*self.epochs+epoch+1)
+                    if self.verbose:
+                        #print(f'Step: {step+1} | Epoch: {epoch+1} of {self.epochs} | Train-Loss: {train_loss:.4f} | Lengthscale: {self.model.covar_module.base_kernel.lengthscale.mean().item():.3f} | Noise: {self.likelihood.noise.item():.3f} | {time.time() - start_epoch:.2f} seconds')
+                        print(f'Step: {step+1} | Epoch: {epoch+1} of {self.epochs} | Train-Loss: {train_loss:.4f}  | Noise: {self.likelihood.noise.item():.3f} | {time.time() - start_epoch:.2f} seconds')
+            except linear_operator.utils.errors.NotPSDError:
+                print("Warning: The matrix is not positive semi-definite. Exiting this run.")
+                sys.exit()
 
                 
 
@@ -453,10 +484,14 @@ class RunModel:
             self.model.eval()
             with torch.no_grad(), gpytorch.settings.fast_pred_var():
                 self.likelihood.eval()  # Also set the likelihood to evaluation mode for GP predictions
-                preds = self.model(x_total_torch)
-                observed_pred = self.likelihood(preds)
-            means = observed_pred.mean.numpy()
-            highest_indices_pred = np.argsort(means)[-topk:]
+                try:
+                    preds = self.model(x_total_torch)
+                    observed_pred = self.likelihood(preds)
+                    means = observed_pred.mean.numpy()
+                    highest_indices_pred = np.argsort(means)[-topk:]
+                except linear_operator.utils.errors.NotPSDError:
+                    print("Warning: The matrix is not positive semi-definite. Exiting this run.")
+                    sys.exit()
         elif self.model_name == 'SVR':
             means = self.model.predict(x_total)
             highest_indices_pred = np.argsort(means)[-topk:]
@@ -558,11 +593,12 @@ if __name__ == '__main__':
 
 # BNN: -v -ln 3 -hs 4 -ps 0.0000001 -cw 0.01 -dr v1 -al
 #      -v -ln 3 -hs 4 -ps 0.0000001 -cw 0.001 -dr v1 -al UCB -s 5 -e 100
-# GP Demo: -v -m GP -sc Minmax -lr 0.1 -al US -s 10 -e 150 -ss 25 -vs 0.2
-        
+# GP Demo: -v -m GP -sc Minmax -lr 0.1 -al US -s 10 -e 150 -ss 25 -vs 0.2  
+ 
 # -v -m GP -sc Minmax -lr 0.1 -al US -s 10 -e 150 -ss 25 -vs 0.2 -kl Matern 
 # -v -m GP -sc Minmax -lr 0.1 -al US -s 10 -e 150 -ss 25 -vs 0.2 -kl RBF
 # -v -m GP -sc Minmax -lr 0.1 -al US -s 10 -e 150 -ss 25 -vs 0.2 -kl Linear
 # -v -m GP -sc Minmax -lr 0.1 -al US -s 10 -e 150 -ss 25 -vs 0.2 -kl Cosine
 # -v -m GP -sc Minmax -lr 0.1 -al US -s 10 -e 150 -ss 25 -vs 0.2 -kl Periodic
- 
+# -v -m GP -sc Minmax -lr 0.1 -al US -s 10 -e 150 -ss 25 -vs 0.2 -kl "RBF+Linear"
+# -v -m GP -sc Minmax -lr 0.1 -al US -s 10 -e 150 -ss 25 -vs 0.2 -kl "RBF+Cosine"
