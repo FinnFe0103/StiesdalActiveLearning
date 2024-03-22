@@ -26,7 +26,8 @@ from Models.ExactGP import ExactGPModel
 class RunModel:
     def __init__(self, model_name, hidden_size, layer_number, steps, epochs, dataset_type, sensor, scaling, samples_per_step, sampling_method, # 0. Initialize all parameters and dataset
                  validation_size, learning_rate, active_learning, directory, verbose, run_name, complexity_weight, prior_sigma,
-                 kernel, lengthscale_prior, lengthscale_sigma, lengthscale_mean,  noise_prior, noise_sigma, noise_mean, noise_constraint):
+                 kernel, lengthscale_prior, lengthscale_sigma, lengthscale_mean,  noise_prior, noise_sigma, noise_mean, noise_constraint,
+                 lengthscale_type):
 
         # Configs
         self.run_name = run_name # Name of the run
@@ -66,6 +67,7 @@ class RunModel:
         self.lengthscale_mean = lengthscale_mean
         self.noise_mean = noise_mean
         self.noise_constraint = noise_constraint
+        self.lengthscale_type = lengthscale_type
 
     def init_model(self, input_dim, hidden_size, layer_number, prior_sigma): # 0.1 Initialize the model
         if self.model_name == 'BNN':
@@ -90,7 +92,7 @@ class RunModel:
             self.optimizer = None # SVR does not have an optimizer
             self.criterion = mean_squared_error # MSE
 
-    def init_kernel(self, kernel_type, lengthscale_prior=None, lengthscale_sigma=None, lengthscale_mean=None): # 0.3 Initialize the kernel
+    def init_kernel(self, kernel_type, lengthscale_prior=None, lengthscale_sigma=None, lengthscale_mean=None, lengthscale_type='Single'): # 0.3 Initialize the kernel
         if kernel_type == 'RBF':
             kernel = gpytorch.kernels.RBFKernel()
         elif kernel_type == 'Matern':
@@ -107,11 +109,13 @@ class RunModel:
             else:
                 raise ValueError('Invalid prior type')
             
-            
             kernel.register_prior("lengthscale_prior", lengthscale_prior, "lengthscale")
             
         elif lengthscale_sigma is not None:
             kernel.lengthscale = lengthscale_sigma
+
+        if lengthscale_type == 'ARD':
+            kernel.ard_num_dims = self.data_pool.shape[1]-1 # Set the number of dimensions for ARD kernel
         
         return kernel
     
@@ -201,7 +205,7 @@ class RunModel:
                 self.likelihood = gpytorch.likelihoods.GaussianLikelihood()
 
             # Kernel
-            self.kernel = self.init_kernel(self.kernel_type, self.lengthscale_prior, self.lengthscale_sigma, self.lengthscale_mean)
+            self.kernel = self.init_kernel(self.kernel_type, self.lengthscale_prior, self.lengthscale_sigma, self.lengthscale_mean, self.lengthscale_type)
             # Model
             self.model = ExactGPModel(X_train, y_train, self.likelihood, self.kernel)
             # Optimizer
@@ -493,7 +497,8 @@ if __name__ == '__main__':
     parser.add_argument('-mls', '--lengthscale_mean', type=float, default=2.0, help='Lengthscale Mean for GP kernel')
     parser.add_argument('-mns', '--noise_mean', type=float, default=1.1, help='Noise Mean for GP')
     parser.add_argument('-nc', '--noise_constraint', type=float, default=1e-3, help='Noise Constraint for GP')
-
+    parser.add_argument('-tls', '--lengthscale_type', type=str, default='Single', help='Lengthscale Type for GP kernel 1. Single, 2. ARD')
+    
     # Active learning parameters
     parser.add_argument('-al', '--active_learning', type=str, default='UCB', help='Type of active learning/acquisition function: 1. US, 2. RS, 3. EI, 4. PI, 5. UCB') # Uncertainty, Random, Expected Improvement, Probability of Improvement, Upper Confidence Bound
     parser.add_argument('-s', '--steps', type=int, default=2, help='Number of steps')
@@ -512,7 +517,7 @@ if __name__ == '__main__':
     if args.model == 'BNN':
         opt_list = ['-sc', '-hs', '-ln', '-ps', '-cw', '-lr', '-al', '-s', '-e', '-ss', '-vs']
     elif args.model == 'GP':
-        opt_list = ['-sc', '-lr', '-al', '-s', '-e', '-ss', '-vs']
+        opt_list = ['-sc', '-lr', '-al', '-s', '-e', '-ss', '-vs', '-kl', '-lpr', '-npr', '-sls', '-sns', '-mls', '-mns', '-nc', '-tls']
     elif args.model == 'SVR':
         opt_list = ['-sc', '-lr', '-al', '-s', '-e', '-ss', '-vs']
     option_value_list = [(action.option_strings[0].lstrip('-'), getattr(args, action.dest)) 
@@ -521,7 +526,8 @@ if __name__ == '__main__':
     
     model = RunModel(args.model, args.hidden_size, args.layer_number, args.steps, args.epochs, args.dataset_type, args.sensor, args.scaling, args.samples_per_step, args.sampling_method,
                      args.validation_size, args.learning_rate, args.active_learning, args.directory, args.verbose, run_name, args.complexity_weight, args.prior_sigma, 
-                     args.kernel, args.lengthscale_prior, args.lengthscale_sigma, args.lengthscale_mean, args.noise_prior, args.noise_sigma, args.noise_mean, args.noise_constraint)
+                     args.kernel, args.lengthscale_prior, args.lengthscale_sigma, args.lengthscale_mean, args.noise_prior, args.noise_sigma, args.noise_mean, args.noise_constraint,
+                     args.lengthscale_type)
 
     # Iterate through the steps of active learning
     for step in range(model.steps):
