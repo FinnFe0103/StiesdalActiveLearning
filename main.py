@@ -92,14 +92,31 @@ class RunModel:
             self.optimizer = None # SVR does not have an optimizer
             self.criterion = mean_squared_error # MSE
 
-    def init_kernel(self, kernel_type, lengthscale_prior=None, lengthscale_sigma=None, lengthscale_mean=None, lengthscale_type='Single'): # 0.3 Initialize the kernel
+    def init_kernel(self, kernel_type, input_dim, lengthscale_prior=None, lengthscale_sigma=None, lengthscale_mean=None, lengthscale_type=None):
+        # If ARD is True, the kernel has a different lengthscale for each input dimension
+        if lengthscale_type == 'ARD':
+            ard_num_dims = input_dim
+        else:
+            ard_num_dims = None
+
+        # Initialize the specified kernel type
         if kernel_type == 'RBF':
-            kernel = gpytorch.kernels.RBFKernel()
+            kernel = gpytorch.kernels.RBFKernel(ard_num_dims=ard_num_dims)
         elif kernel_type == 'Matern':
-            kernel = gpytorch.kernels.MaternKernel()
+            kernel = gpytorch.kernels.MaternKernel(ard_num_dims=ard_num_dims)
+        elif kernel_type == 'Linear':
+            kernel = gpytorch.kernels.LinearKernel(ard_num_dims=ard_num_dims)
+        elif kernel_type == 'Cosine':
+            kernel = gpytorch.kernels.CosineKernel(ard_num_dims=ard_num_dims)
+        elif kernel_type == 'Periodic':
+            kernel = gpytorch.kernels.PeriodicKernel()
+        elif kernel_type == 'SpectralMixture':
+            kernel = gpytorch.kernels.SpectralMixtureKernel(num_mixtures=ard_num_dims, ard_num_dims=input_dim)
+            # For SpectralMixtureKernel, you might need to set additional parameters like the number of mixtures
         else:
             raise ValueError('Invalid kernel type')
-        
+
+        # Apply a lengthscale prior if provided
         if lengthscale_prior is not None and lengthscale_sigma is not None and lengthscale_mean is not None:
             if lengthscale_prior == 'Normal':
                 lengthscale_prior = gpytorch.priors.NormalPrior(lengthscale_mean, lengthscale_sigma)
@@ -108,16 +125,13 @@ class RunModel:
                 kernel.lengthscale_constraint = gpytorch.constraints.Positive()
             else:
                 raise ValueError('Invalid prior type')
-            
+
             kernel.register_prior("lengthscale_prior", lengthscale_prior, "lengthscale")
-            
         elif lengthscale_sigma is not None:
             kernel.lengthscale = lengthscale_sigma
 
-        if lengthscale_type == 'ARD':
-            kernel.ard_num_dims = self.data_pool.shape[1]-1 # Set the number of dimensions for ARD kernel
-        
         return kernel
+
     
     def init_noise(self, noise_prior, noise_sigma=None, noise_mean=None, noise_constraint=1e-6): # 0.4 Initialize the noise
         if noise_prior is not None and noise_sigma is not None and noise_mean is not None:
@@ -205,7 +219,7 @@ class RunModel:
                 self.likelihood = gpytorch.likelihoods.GaussianLikelihood()
 
             # Kernel
-            self.kernel = self.init_kernel(self.kernel_type, self.lengthscale_prior, self.lengthscale_sigma, self.lengthscale_mean, self.lengthscale_type)
+            self.kernel = self.init_kernel(self.kernel_type, X_train.shape[1], self.lengthscale_prior, self.lengthscale_sigma, self.lengthscale_mean, self.lengthscale_type)
             # Model
             self.model = ExactGPModel(X_train, y_train, self.likelihood, self.kernel)
             # Optimizer
@@ -227,7 +241,7 @@ class RunModel:
 
                 self.writer.add_scalar('loss/train', train_loss, step*self.epochs+epoch+1)
                 if self.verbose:
-                    print(f'Step: {step+1} | Epoch: {epoch+1} of {self.epochs} | Train-Loss: {train_loss:.4f} | Lengthscale: {self.model.covar_module.base_kernel.lengthscale.item():.3f} | Noise: {self.likelihood.noise.item():.3f} | {time.time() - start_epoch:.2f} seconds')
+                    print(f'Step: {step+1} | Epoch: {epoch+1} of {self.epochs} | Train-Loss: {train_loss:.4f} | Lengthscale: {self.model.covar_module.base_kernel.lengthscale.mean().item():.3f} | Noise: {self.likelihood.noise.item():.3f} | {time.time() - start_epoch:.2f} seconds')
                 
 
             if self.validation_size > 0:
