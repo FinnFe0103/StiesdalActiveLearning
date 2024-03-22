@@ -25,7 +25,8 @@ from Models.ExactGP import ExactGPModel
 
 class RunModel:
     def __init__(self, model_name, hidden_size, layer_number, steps, epochs, dataset_type, sensor, scaling, samples_per_step, sampling_method, # 0. Initialize all parameters and dataset
-                 validation_size, learning_rate, active_learning, directory, verbose, run_name, complexity_weight, prior_sigma):
+                 validation_size, learning_rate, active_learning, directory, verbose, run_name, complexity_weight, prior_sigma,
+                 kernel, lengthscale_prior, lengthscale_sigma, lengthscale_mean,  noise_prior, noise_sigma, noise_mean, noise_constraint):
 
         # Configs
         self.run_name = run_name # Name of the run
@@ -52,7 +53,19 @@ class RunModel:
         self.init_model(self.data_known.shape[1]-1, hidden_size, layer_number, prior_sigma) # Initialize the model
         self.device = torch.device("mps" if torch.backends.mps.is_available() and self.model_name != "GP" else "cpu")
         print(f'Using {self.device} for training')
+        
+        # BNN Parameters
         self.complexity_weight = complexity_weight # Complexity weight for ELBO
+
+        # GP Parameters
+        self.kernel_type = kernel # Kernel type for GP
+        self.lengthscale_prior = lengthscale_prior
+        self.noise_prior = noise_prior
+        self.lengthscale_sigma = lengthscale_sigma # Lengthscale for GP
+        self.noise_sigma = noise_sigma # Noise for GP
+        self.lengthscale_mean = lengthscale_mean
+        self.noise_mean = noise_mean
+        self.noise_constraint = noise_constraint
 
     def init_model(self, input_dim, hidden_size, layer_number, prior_sigma): # 0.1 Initialize the model
         if self.model_name == 'BNN':
@@ -76,6 +89,50 @@ class RunModel:
         elif self.model_name == 'SVR':
             self.optimizer = None # SVR does not have an optimizer
             self.criterion = mean_squared_error # MSE
+
+    def init_kernel(self, kernel_type, lengthscale_prior=None, lengthscale_sigma=None, lengthscale_mean=None): # 0.3 Initialize the kernel
+        if kernel_type == 'RBF':
+            kernel = gpytorch.kernels.RBFKernel()
+        elif kernel_type == 'Matern':
+            kernel = gpytorch.kernels.MaternKernel()
+        else:
+            raise ValueError('Invalid kernel type')
+        
+        if lengthscale_prior is not None and lengthscale_sigma is not None and lengthscale_mean is not None:
+            if lengthscale_prior == 'Normal':
+                lengthscale_prior = gpytorch.priors.NormalPrior(lengthscale_mean, lengthscale_sigma)
+            elif lengthscale_prior == 'Gamma':
+                lengthscale_prior = gpytorch.priors.GammaPrior(lengthscale_mean, lengthscale_sigma)
+                kernel.lengthscale_constraint = gpytorch.constraints.Positive()
+            else:
+                raise ValueError('Invalid prior type')
+            
+            
+            kernel.register_prior("lengthscale_prior", lengthscale_prior, "lengthscale")
+            
+        elif lengthscale_sigma is not None:
+            kernel.lengthscale = lengthscale_sigma
+        
+        return kernel
+    
+    def init_noise(self, noise_prior, noise_sigma=None, noise_mean=None, noise_constraint=1e-6): # 0.4 Initialize the noise
+        if noise_prior is not None and noise_sigma is not None and noise_mean is not None:
+            if noise_prior == 'Normal':
+                constraint = gpytorch.constraints.GreaterThan(noise_constraint)
+                noise_prior = gpytorch.priors.NormalPrior(noise_mean, noise_sigma)
+            elif noise_prior == 'Gamma':
+                constraint = gpytorch.constraints.GreaterThan(noise_constraint)
+                noise_prior = gpytorch.priors.GammaPrior(noise_mean, noise_sigma)
+            else:
+                raise ValueError('Invalid noise prior')
+    
+            return noise_prior, constraint, noise_sigma
+    
+        elif noise_sigma is not None:
+            noise_constraint = None
+            return None, None, noise_sigma
+        else:
+            return None, None, None
     
     def train_model(self, step): # 1. Train the model
         # Split the pool data into train and validation sets
@@ -131,16 +188,30 @@ class RunModel:
         elif self.model_name == 'GP': # GP Training
             X_train = torch.tensor(train_loader[:, :-1]).to(self.device)
             y_train = torch.tensor(train_loader[:, -1]).to(self.device)
-            
-            # Initialize likelihood and model with training data
-            self.likelihood = gpytorch.likelihoods.GaussianLikelihood().to(self.device)
-            self.likelihood.noise = 0.01 #hyperparameter
-            self.model = ExactGPModel(X_train, y_train, self.likelihood).to(self.device)
-            self.init_optimizer_criterion(self.learning_rate)
 
+            # Noise & Likelihood
+            noise_prior, noise_constraint, noise_sigma = self.init_noise(self.noise_prior, self.noise_sigma, self.noise_mean)
+            if noise_prior is not None:
+                self.likelihood = gpytorch.likelihoods.GaussianLikelihood(noise_constraint=noise_constraint)
+                self.likelihood.noise_covar.register_prior("noise_prior", noise_prior, "noise")
+            elif noise_sigma is not None:
+                self.likelihood = gpytorch.likelihoods.GaussianLikelihood()
+                self.likelihood.noise = noise_sigma
+            else:
+                self.likelihood = gpytorch.likelihoods.GaussianLikelihood()
+
+            # Kernel
+            self.kernel = self.init_kernel(self.kernel_type, self.lengthscale_prior, self.lengthscale_sigma, self.lengthscale_mean)
+            # Model
+            self.model = ExactGPModel(X_train, y_train, self.likelihood, self.kernel)
+            # Optimizer
+            self.init_optimizer_criterion(self.learning_rate)
+            # Cost function
+            self.mll = gpytorch.mlls.ExactMarginalLogLikelihood(self.likelihood, self.model)
+
+            # Set the model and likelihood to training mode
             self.model.train()
             self.likelihood.train()
-            self.mll = gpytorch.mlls.ExactMarginalLogLikelihood(self.likelihood, self.model)
 
             for epoch in range(self.epochs):
                 start_epoch = time.time()
@@ -413,6 +484,16 @@ if __name__ == '__main__':
     parser.add_argument('-ps', '--prior_sigma', type=float, default=0.0000001, help='Prior sigma')
     parser.add_argument('-cw', '--complexity_weight', type=float, default=0.01, help='Complexity weight')
 
+    # GP
+    parser.add_argument('-kl', '--kernel', type=str, default='RBF', help='Kernel function for GP: 1. RBF, 2. Matern, ...') #tbd
+    parser.add_argument('-lpr', '--lengthscale_prior', type=str, default=None, help='Set prior for Lengthscale 1. Gamma 2. Normal') #tbd
+    parser.add_argument('-npr', '--noise_prior', type=str, default=None, help='Set prior for Noise 1. Gamma 2. Normal') #tbd
+    parser.add_argument('-sls', '--lengthscale_sigma', type=float, default=0.2, help='Lengthscale Sigma for GP kernel')
+    parser.add_argument('-sns', '--noise_sigma', type=float, default=0.1, help='Noise Sigma for GP')
+    parser.add_argument('-mls', '--lengthscale_mean', type=float, default=2.0, help='Lengthscale Mean for GP kernel')
+    parser.add_argument('-mns', '--noise_mean', type=float, default=1.1, help='Noise Mean for GP')
+    parser.add_argument('-nc', '--noise_constraint', type=float, default=1e-3, help='Noise Constraint for GP')
+
     # Active learning parameters
     parser.add_argument('-al', '--active_learning', type=str, default='UCB', help='Type of active learning/acquisition function: 1. US, 2. RS, 3. EI, 4. PI, 5. UCB') # Uncertainty, Random, Expected Improvement, Probability of Improvement, Upper Confidence Bound
     parser.add_argument('-s', '--steps', type=int, default=2, help='Number of steps')
@@ -439,7 +520,8 @@ if __name__ == '__main__':
     run_name = '_'.join(f"{abbr}{str(value)}" for abbr, value in option_value_list)
     
     model = RunModel(args.model, args.hidden_size, args.layer_number, args.steps, args.epochs, args.dataset_type, args.sensor, args.scaling, args.samples_per_step, args.sampling_method,
-                     args.validation_size, args.learning_rate, args.active_learning, args.directory, args.verbose, run_name, args.complexity_weight, args.prior_sigma)
+                     args.validation_size, args.learning_rate, args.active_learning, args.directory, args.verbose, run_name, args.complexity_weight, args.prior_sigma, 
+                     args.kernel, args.lengthscale_prior, args.lengthscale_sigma, args.lengthscale_mean, args.noise_prior, args.noise_sigma, args.noise_mean, args.noise_constraint)
 
     # Iterate through the steps of active learning
     for step in range(model.steps):
@@ -457,4 +539,6 @@ if __name__ == '__main__':
 
 # BNN: -v -ln 3 -hs 4 -ps 0.0000001 -cw 0.01 -dr v1 -al
 #      -v -ln 3 -hs 4 -ps 0.0000001 -cw 0.001 -dr v1 -al UCB -s 5 -e 100
-# GP Demo: -v -m GP -sc Minmax -lr 0.1 -al US -s 10 -e 10 -ss 25 -vs 0.2
+# GP Demo: -v -m GP -sc Minmax -lr 0.1 -al US -s 10 -e 150 -ss 25 -vs 0.2
+        
+# -v -m GP -sc Minmax -lr 0.1 -al US -s 10 -e 150 -ss 25 -vs 0.2 -kl Matern 
