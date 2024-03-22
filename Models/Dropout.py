@@ -1,9 +1,10 @@
 import torch.nn as nn
 
-class Ensemble(nn.Module):
+class Dropout(nn.Module):
     def __init__(self, input_dim, hidden_size, layer_number):
         super().__init__()
 
+        self.dropout = nn.Dropout(p=0.5)
         self.activation = nn.Tanh()
 
         self.layers = nn.ModuleList()
@@ -18,6 +19,7 @@ class Ensemble(nn.Module):
         hidden = self.activation(self.layers[0](input))
         for layer in self.layers[1:-1]:
             hidden_temp = self.activation(layer(hidden))
+            hidden_temp = self.dropout(hidden_temp)
             hidden = hidden_temp + hidden  # residual connection
 
         output_mean = self.layers[-1](hidden).squeeze()
