@@ -27,7 +27,7 @@ from Models.Ensemble import Ensemble
 from Models.Dropout import Dropout
 
 class RunModel:
-    def __init__(self, model_name, hidden_size, layer_number, steps, epochs, dataset_type, sensor, scaling, samples_per_step, # 0. Initialize all parameters and dataset
+    def __init__(self, model_name, hidden_size, layer_number, steps, epochs, dataset_type, sensor, scaling, samples_per_step, sampling_method, # 0. Initialize all parameters and dataset
                  validation_size, learning_rate, active_learning, directory, verbose, run_name, complexity_weight, prior_sigma, ensemble_size, 
                  kernel, lengthscale_prior, lengthscale_sigma, lengthscale_mean,  noise_prior, noise_sigma, noise_mean, noise_constraint, lengthscale_type):
 
@@ -235,7 +235,7 @@ class RunModel:
             # Initialize likelihood and model with training data
             self.likelihood = gpytorch.likelihoods.GaussianLikelihood().to(self.device)
             self.likelihood.noise = 0.01 #hyperparameter
-            self.model = ExactGPModel(X_train, y_train, self.likelihood).to(self.device)
+            self.model = ExactGPModel(X_train, y_train, self.likelihood, self.kernel_type).to(self.device)
             self.init_optimizer_criterion()
             
             # Noise & Likelihood
@@ -721,7 +721,7 @@ if __name__ == '__main__':
                          for action in parser._actions if action.option_strings and action.option_strings[0] in opt_list]
     run_name = '_'.join(f"{abbr}{str(value)}" for abbr, value in option_value_list)
     
-    model = RunModel(args.model, args.hidden_size, args.layer_number, args.steps, args.epochs, args.dataset_type, args.sensor, args.scaling, args.samples_per_step, 
+    model = RunModel(args.model, args.hidden_size, args.layer_number, args.steps, args.epochs, args.dataset_type, args.sensor, args.scaling, args.samples_per_step, args.sampling_method,
                      args.validation_size, args.learning_rate, args.active_learning, args.directory, args.verbose, run_name, args.complexity_weight, args.prior_sigma, args.ensemble_size,
                     args.kernel, args.lengthscale_prior, args.lengthscale_sigma, args.lengthscale_mean, args.noise_prior, args.noise_sigma, args.noise_mean, args.noise_constraint,
                      args.lengthscale_type)
@@ -743,6 +743,7 @@ if __name__ == '__main__':
 
 # BNN: -v -ln 3 -hs 4 -ps 0.0000001 -cw 0.001 -dr v1 -al UCB -s 5 -e 100
 # DE: -v -m DE -vs 0.2 -es 2
+# MCD: -v -m MCD -vs 0.2 -hs 20 -ln 5
 # GP:
 # -v -m GP -sc Minmax -lr 0.1 -al US -s 10 -e 150 -ss 25 -vs 0.2 -kl Matern 
 # -v -m GP -sc Minmax -lr 0.1 -al US -s 10 -e 150 -ss 25 -vs 0.2 -kl RBF
