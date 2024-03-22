@@ -110,9 +110,6 @@ class RunModel:
             kernel = gpytorch.kernels.CosineKernel(ard_num_dims=ard_num_dims)
         elif kernel_type == 'Periodic':
             kernel = gpytorch.kernels.PeriodicKernel()
-        elif kernel_type == 'SpectralMixture':
-            kernel = gpytorch.kernels.SpectralMixtureKernel(num_mixtures=ard_num_dims, ard_num_dims=input_dim)
-            # For SpectralMixtureKernel, you might need to set additional parameters like the number of mixtures
         else:
             raise ValueError('Invalid kernel type')
 
@@ -127,7 +124,7 @@ class RunModel:
                 raise ValueError('Invalid prior type')
 
             kernel.register_prior("lengthscale_prior", lengthscale_prior, "lengthscale")
-        elif lengthscale_sigma is not None:
+        elif lengthscale_sigma is not None and kernel_type not in ['Linear', 'Cosine', 'Periodic', 'SpectralMixture']:
             kernel.lengthscale = lengthscale_sigma
 
         return kernel
@@ -241,7 +238,9 @@ class RunModel:
 
                 self.writer.add_scalar('loss/train', train_loss, step*self.epochs+epoch+1)
                 if self.verbose:
-                    print(f'Step: {step+1} | Epoch: {epoch+1} of {self.epochs} | Train-Loss: {train_loss:.4f} | Lengthscale: {self.model.covar_module.base_kernel.lengthscale.mean().item():.3f} | Noise: {self.likelihood.noise.item():.3f} | {time.time() - start_epoch:.2f} seconds')
+                    #print(f'Step: {step+1} | Epoch: {epoch+1} of {self.epochs} | Train-Loss: {train_loss:.4f} | Lengthscale: {self.model.covar_module.base_kernel.lengthscale.mean().item():.3f} | Noise: {self.likelihood.noise.item():.3f} | {time.time() - start_epoch:.2f} seconds')
+                    print(f'Step: {step+1} | Epoch: {epoch+1} of {self.epochs} | Train-Loss: {train_loss:.4f}  | Noise: {self.likelihood.noise.item():.3f} | {time.time() - start_epoch:.2f} seconds')
+
                 
 
             if self.validation_size > 0:
@@ -503,9 +502,9 @@ if __name__ == '__main__':
     parser.add_argument('-cw', '--complexity_weight', type=float, default=0.01, help='Complexity weight')
 
     # GP
-    parser.add_argument('-kl', '--kernel', type=str, default='RBF', help='Kernel function for GP: 1. RBF, 2. Matern, ...') #tbd
-    parser.add_argument('-lpr', '--lengthscale_prior', type=str, default=None, help='Set prior for Lengthscale 1. Gamma 2. Normal') #tbd
-    parser.add_argument('-npr', '--noise_prior', type=str, default=None, help='Set prior for Noise 1. Gamma 2. Normal') #tbd
+    parser.add_argument('-kl', '--kernel', type=str, default='RBF', help='Kernel function for GP: 1. RBF, 2. Matern, 3. Linear, 4. Cosine, 5. Periodic')
+    parser.add_argument('-lpr', '--lengthscale_prior', type=str, default=None, help='Set prior for Lengthscale 1. Gamma 2. Normal') 
+    parser.add_argument('-npr', '--noise_prior', type=str, default=None, help='Set prior for Noise 1. Gamma 2. Normal') 
     parser.add_argument('-sls', '--lengthscale_sigma', type=float, default=0.2, help='Lengthscale Sigma for GP kernel')
     parser.add_argument('-sns', '--noise_sigma', type=float, default=0.1, help='Noise Sigma for GP')
     parser.add_argument('-mls', '--lengthscale_mean', type=float, default=2.0, help='Lengthscale Mean for GP kernel')
@@ -562,3 +561,8 @@ if __name__ == '__main__':
 # GP Demo: -v -m GP -sc Minmax -lr 0.1 -al US -s 10 -e 150 -ss 25 -vs 0.2
         
 # -v -m GP -sc Minmax -lr 0.1 -al US -s 10 -e 150 -ss 25 -vs 0.2 -kl Matern 
+# -v -m GP -sc Minmax -lr 0.1 -al US -s 10 -e 150 -ss 25 -vs 0.2 -kl RBF
+# -v -m GP -sc Minmax -lr 0.1 -al US -s 10 -e 150 -ss 25 -vs 0.2 -kl Linear
+# -v -m GP -sc Minmax -lr 0.1 -al US -s 10 -e 150 -ss 25 -vs 0.2 -kl Cosine
+# -v -m GP -sc Minmax -lr 0.1 -al US -s 10 -e 150 -ss 25 -vs 0.2 -kl Periodic
+ 
