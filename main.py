@@ -232,12 +232,6 @@ class RunModel:
             X_train = torch.tensor(train_loader[:, :-1]).to(self.device)
             y_train = torch.tensor(train_loader[:, -1]).to(self.device)
 
-            # Initialize likelihood and model with training data
-            self.likelihood = gpytorch.likelihoods.GaussianLikelihood().to(self.device)
-            self.likelihood.noise = 0.01 #hyperparameter
-            self.model = ExactGPModel(X_train, y_train, self.likelihood, self.kernel_type).to(self.device)
-            self.init_optimizer_criterion()
-            
             # Noise & Likelihood
             noise_prior, noise_constraint, noise_sigma = self.init_noise(self.noise_prior, self.noise_sigma, self.noise_mean)
             if noise_prior is not None:
@@ -254,7 +248,7 @@ class RunModel:
             # Model
             self.model = ExactGPModel(X_train, y_train, self.likelihood, self.kernel)
             # Optimizer
-            self.init_optimizer_criterion(self.learning_rate)
+            self.init_optimizer_criterion()
             # Cost function
             self.mll = gpytorch.mlls.ExactMarginalLogLikelihood(self.likelihood, self.model)
 
