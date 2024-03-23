@@ -709,10 +709,10 @@ if __name__ == '__main__':
     parser.add_argument('-al', '--active_learning', type=str, default='UCB', help='Type of active learning/acquisition function: 1. US, 2. RS, 3. EI, 4. PI, 5. UCB') # Uncertainty, Random, Expected Improvement, Probability of Improvement, Upper Confidence Bound
     parser.add_argument('-s', '--steps', type=int, default=2, help='Number of steps')
     parser.add_argument('-e', '--epochs', type=int, default=100, help='Number of epochs')
-    parser.add_argument('-ss', '--samples_per_step', type=int, default=100, help='Samples to be selected per step and initial samplesize')
+    parser.add_argument('-ss', '--samples_per_step', type=int, default=33, help='Samples to be selected per step and initial samplesize')
     parser.add_argument('-sm', '--sampling_method', type=str, default='Random', help='Sampling method for initial samples. 1. Random, 2. LHC')
     parser.add_argument('-vs', '--validation_size', type=float, default=0, help='Size of the validation set in percentage')
-    parser.add_argument('-t', '--topk', type=int, default=100, help='Number of top predictions to be selected')
+    parser.add_argument('-t', '--topk', type=int, default=33, help='Number of top predictions to be selected')
     
     # Output parameters    
     parser.add_argument('-dr', '--directory', type=str, default='_plots', help='Sub-directory to save the ouputs')
