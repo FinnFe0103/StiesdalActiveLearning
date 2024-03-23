@@ -597,7 +597,7 @@ class RunModel:
     def final_prediction(self, topk, samples=100):
         x_total = np.concatenate((self.data_pool[:, :-1], self.data_known[:, :-1]), axis=0)
         y_total = np.concatenate((self.data_pool[:, -1], self.data_known[:, -1]), axis=0)
-        
+
         x_total_torch = torch.tensor(x_total).to(self.device)
         
         if self.model_name == 'BNN':
@@ -659,6 +659,8 @@ class RunModel:
 
         if x_highest_actual_1 in x_highest_pred_n:
             print("---------The highest actual value is in the top predictions")
+            #pd.DataFrame(x_highest_actual_1).to_csv('x_highest_actual_1.csv')
+            #pd.DataFrame(x_highest_pred_n).to_csv('x_highest_pred_n.csv')
         else:
             print("The highest actual value is NOT in the top predictions---------")
         print(f'Percentage of common indices in top {topk} predictions: {percentage_common:.2f}%')

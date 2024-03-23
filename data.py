@@ -13,7 +13,7 @@ class Dataprep:
     # Upon initialization, load the data, normalize it, and select the initial samples
     def __init__(self, dataset_type, sensor, scaling, initial_samplesize, sampling_method):
         if dataset_type == 'Caselist':
-            self.x, self.y, self.groups = self.load_caselist(sensor)
+            self.x, self.y= self.load_caselist(sensor)
         elif dataset_type.split('_')[0] == 'Generated':
             dataset_size = int(dataset_type.split('_')[1])
             self.x, self.y = self.generate_data(-10, 10, dataset_size)
@@ -41,11 +41,11 @@ class Dataprep:
         x = pd.read_csv('_data/caselist.csv')
         y = pd.read_csv('_data/sim_results.csv')
 
-        groups = np.array(x.iloc[:, -1])
-        x = np.array(x.iloc[:, 1:-1])
+        #groups = np.array(x.iloc[:, -1])
+        #x = np.array(x.iloc[:, 1:-1])
         y = np.array(y[sensor])
     
-        return x.astype(np.float32), y.astype(np.float32), groups
+        return x.astype(np.float32), y.astype(np.float32)#, groups
     
     def normalize_data(self, x, y, scaling): # Normalize the data using StandardScaler/MinMaxScaler/none
         # Initialize the scaler for x and y
