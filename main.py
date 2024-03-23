@@ -29,7 +29,7 @@ from Models.Dropout import Dropout
 class RunModel:
     def __init__(self, model_name, hidden_size, layer_number, steps, epochs, dataset_type, sensor, scaling, samples_per_step, sampling_method, # 0. Initialize all parameters and dataset
                  validation_size, learning_rate, active_learning, directory, verbose, run_name, complexity_weight, prior_sigma, ensemble_size, 
-                 kernel, lengthscale_prior, lengthscale_sigma, lengthscale_mean,  noise_prior, noise_sigma, noise_mean, noise_constraint, lengthscale_type):
+                 kernel, lengthscale_prior, lengthscale_sigma, lengthscale_mean,  noise_prior, noise_sigma, noise_mean, noise_constraint, lengthscale_type, dropout_rate):
 
         # Configs
         self.run_name = run_name # Name of the run
@@ -53,7 +53,7 @@ class RunModel:
         # Initialize the model and optimizer
         self.learning_rate = learning_rate # Learning rate for the optimizer
         self.model_name = model_name # Name of the model
-        self.init_model(self.data_known.shape[1]-1, hidden_size, layer_number, prior_sigma, complexity_weight, ensemble_size) # Initialize the model
+        self.init_model(self.data_known.shape[1]-1, hidden_size, layer_number, prior_sigma, complexity_weight, ensemble_size, dropout_rate) # Initialize the model
         self.device = torch.device('mps' if torch.backends.mps.is_available() and self.model_name != 'GP' else 'cpu') #and self.model_name != 'DE' 
         print(f'Using {self.device} for training')
         
@@ -68,7 +68,7 @@ class RunModel:
         self.noise_constraint = noise_constraint
         self.lengthscale_type = lengthscale_type
 
-    def init_model(self, input_dim, hidden_size, layer_number, prior_sigma, complexity_weight, ensemble_size): # 0.1 Initialize the model
+    def init_model(self, input_dim, hidden_size, layer_number, prior_sigma, complexity_weight, ensemble_size, dropout_rate): # 0.1 Initialize the model
         if self.model_name == 'BNN':
             self.complexity_weight = complexity_weight # Complexity weight for ELBO
             self.model = BayesianNetwork(input_dim, hidden_size, layer_number, prior_sigma)
@@ -84,7 +84,7 @@ class RunModel:
             self.model = [Ensemble(input_dim, hidden_size, layer_number) for _ in range(ensemble_size)]
             self.init_optimizer_criterion() # Initialize the optimizer
         elif self.model_name == 'MCD':
-            self.model = Dropout(input_dim, hidden_size, layer_number)
+            self.model = Dropout(input_dim, hidden_size, layer_number, dropout_rate)
             self.init_optimizer_criterion()
     
     def init_optimizer_criterion(self): # 0.2 Initialize the optimizer
@@ -675,6 +675,9 @@ if __name__ == '__main__':
     parser.add_argument('-hs', '--hidden_size', type=int, default=4, help='Number of hidden units')
     parser.add_argument('-ln', '--layer_number', type=int, default=3, help='Number of layers')
 
+    # Dropout
+    parser.add_argument('-dp', '--dropout', type=float, default=0.5, help='Dropout rate')
+
     # GP
     parser.add_argument('-kl', '--kernel', type=str, default='RBF', help='Kernel function for GP: 1. RBF, 2. Matern, 3. Linear, 4. Cosine, 5. Periodic')
     parser.add_argument('-lpr', '--lengthscale_prior', type=str, default=None, help='Set prior for Lengthscale 1. Gamma 2. Normal') 
@@ -710,7 +713,7 @@ if __name__ == '__main__':
     elif args.model == 'DE':
         opt_list = ['-sc', '-hs', '-ln', '-lr', '-al', '-s', '-e', '-ss', '-vs', '-es']
     elif args.model == 'MCD':
-        opt_list = ['-sc', '-hs', '-ln', '-lr', '-al', '-s', '-e', '-ss', '-vs']
+        opt_list = ['-sc', '-hs', '-ln', '-lr', '-al', '-s', '-e', '-ss', '-vs', '-dp']
     option_value_list = [(action.option_strings[0].lstrip('-'), getattr(args, action.dest)) 
                          for action in parser._actions if action.option_strings and action.option_strings[0] in opt_list]
     run_name = '_'.join(f"{abbr}{str(value)}" for abbr, value in option_value_list)
@@ -718,7 +721,7 @@ if __name__ == '__main__':
     model = RunModel(args.model, args.hidden_size, args.layer_number, args.steps, args.epochs, args.dataset_type, args.sensor, args.scaling, args.samples_per_step, args.sampling_method,
                      args.validation_size, args.learning_rate, args.active_learning, args.directory, args.verbose, run_name, args.complexity_weight, args.prior_sigma, args.ensemble_size,
                     args.kernel, args.lengthscale_prior, args.lengthscale_sigma, args.lengthscale_mean, args.noise_prior, args.noise_sigma, args.noise_mean, args.noise_constraint,
-                     args.lengthscale_type)
+                     args.lengthscale_type, args.dropout)
 
     # Iterate through the steps of active learning
     for step in range(model.steps):

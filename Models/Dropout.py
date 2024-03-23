@@ -1,10 +1,10 @@
 import torch.nn as nn
 
 class Dropout(nn.Module):
-    def __init__(self, input_dim, hidden_size, layer_number):
+    def __init__(self, input_dim, hidden_size, layer_number, dropout_rate=0.5):
         super().__init__()
 
-        self.dropout = nn.Dropout(p=0.5)
+        self.dropout = nn.Dropout(p=dropout_rate)
         self.activation = nn.Tanh()
 
         self.layers = nn.ModuleList()
