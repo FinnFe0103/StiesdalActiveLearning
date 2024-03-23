@@ -27,9 +27,15 @@ from Models.Ensemble import Ensemble
 from Models.Dropout import Dropout
 
 class RunModel:
-    def __init__(self, model_name, hidden_size, layer_number, steps, epochs, dataset_type, sensor, scaling, samples_per_step, sampling_method, # 0. Initialize all parameters and dataset
-                 validation_size, learning_rate, active_learning, directory, verbose, run_name, complexity_weight, prior_sigma, ensemble_size, 
-                 kernel, lengthscale_prior, lengthscale_sigma, lengthscale_mean,  noise_prior, noise_sigma, noise_mean, noise_constraint, lengthscale_type, dropout_rate):
+    def __init__(self, dataset_type, scaling, sensor,
+                model_name, learning_rate,
+                prior_sigma, complexity_weight,
+                hidden_size, layer_number,
+                ensemble_size, 
+                dropout_rate,
+                kernel, lengthscale_prior, lengthscale_sigma, lengthscale_mean, noise_prior, noise_sigma, noise_mean, noise_constraint, lengthscale_type,
+                active_learning, steps, epochs, samples_per_step, sampling_method, validation_size, topk,
+                directory, verbose, run_name):
 
         # Configs
         self.run_name = run_name # Name of the run
@@ -267,7 +273,6 @@ class RunModel:
 
                     self.writer.add_scalar('loss/train', train_loss, step*self.epochs+epoch+1)
                     if self.verbose:
-                        #print(f'Step: {step+1} | Epoch: {epoch+1} of {self.epochs} | Train-Loss: {train_loss:.4f} | Lengthscale: {self.model.covar_module.base_kernel.lengthscale.mean().item():.3f} | Noise: {self.likelihood.noise.item():.3f} | {time.time() - start_epoch:.2f} seconds')
                         print(f'Step: {step+1} | Epoch: {epoch+1} of {self.epochs} | Train-Loss: {train_loss:.4f}  | Noise: {self.likelihood.noise.item():.3f} | {time.time() - start_epoch:.2f} seconds')
             except linear_operator.utils.errors.NotPSDError:
                 print("Warning: The matrix is not positive semi-definite. Exiting this run.")
@@ -488,8 +493,6 @@ class RunModel:
             preds = torch.stack(preds)
             means = preds.mean(dim=0).detach().cpu().numpy()
             stds = preds.std(dim=0).detach().cpu().numpy()
-            print(stds)
-            print(stds.shape)
 
 
             ##########################################
@@ -532,7 +535,7 @@ class RunModel:
         
         return selected_indices
             
-    def plot(self, means, stds, selected_indices, step, x_highest_pred, y_highest_pred, x_highest_actual, y_highest_actual): #4.1 Plot the predictions and selected indices
+    def plot(self, means, stds, selected_indices, step, x_highest_pred_n, y_highest_pred_n, x_highest_actual_n, y_highest_actual_n, x_highest_actual_1, y_highest_actual_1): #4.1 Plot the predictions and selected indices
         x_pool = self.data_pool[:, :-1] # [observations, features]
         y_pool = self.data_pool[:, -1] # [observations]
         x_selected = self.data_known[:, :-1] # [observations, features]
@@ -543,8 +546,9 @@ class RunModel:
             pca = PCA(n_components=1)
             x_pool = pca.fit_transform(x_pool) # [observations, 1]
             x_selected = pca.transform(x_selected) # [observations, 1]
-            x_highest_pred = pca.transform(x_highest_pred) # [observations, 1]
-            x_highest_actual = pca.transform(x_highest_actual) # [observations, 1]
+            x_highest_pred_n = pca.transform(x_highest_pred_n) # [observations, 1]
+            x_highest_actual_n = pca.transform(x_highest_actual_n) # [observations, 1]
+            x_highest_actual_1 = pca.transform(x_highest_actual_1.reshape(1, -1)) # [observations, 1]
             #print('Explained variance by the first princiapal components:', pca.explained_variance_ratio_)
             pca_applied = True
             
@@ -560,8 +564,9 @@ class RunModel:
         plt.scatter(x_pool, y_pool, c="green", marker="*", alpha=0.1)  # Plot the data pairs in the pool
         plt.scatter(x_selected, y_selected, c="red", marker="*", alpha=0.2)  # plot the train data on top
         plt.scatter(x_pool_selected, y_pool_selected, c="blue", marker="o", alpha=0.3)  # Highlight selected data points
-        plt.scatter(x_highest_pred, y_highest_pred, c="purple", marker="o", alpha=0.3)
-        plt.scatter(x_highest_actual, y_highest_actual, c="orange", marker="o", alpha=0.1)
+        plt.scatter(x_highest_pred_n, y_highest_pred_n, c="purple", marker="o", alpha=0.3)
+        plt.scatter(x_highest_actual_n, y_highest_actual_n, c="orange", marker="o", alpha=0.1)
+        plt.scatter(x_highest_actual_1, y_highest_actual_1, c="red", marker="o")
         plt.title(self.run_name.replace("_", " ") + f' | Step {step + 1}', fontsize=10)
         plt.xlabel('1 Principal Component' if pca_applied else 'x')
         plt.legend(['Mean prediction', 'Confidence Interval', 'Pool data (unseen)', 'Seen data', 'Selected data', 'Final Prediction'], fontsize=8)
@@ -609,7 +614,6 @@ class RunModel:
                     preds = self.model(x_total_torch)
                     observed_pred = self.likelihood(preds)
                     means = observed_pred.mean.numpy()
-                    highest_indices_pred = np.argsort(means)[-topk:]
                 except linear_operator.utils.errors.NotPSDError:
                     print("Warning: The matrix is not positive semi-definite. Exiting this run.")
                     sys.exit()
@@ -628,27 +632,39 @@ class RunModel:
             preds = torch.stack(preds)
             means = preds.mean(dim=0).detach().cpu().numpy()
             
-        highest_indices_pred = np.argsort(means)[-topk:]
+        highest_indices_pred_n = np.argsort(means)[-topk:]
+        highest_indices_pred_1 = np.argsort(means)[-1]
+        highest_indices_actual_n = np.argsort(y_total)[-topk:]
+        highest_indices_actual_1 = np.argsort(y_total)[-1]
 
-        x_highest_pred = x_total[highest_indices_pred]
-        y_highest_pred = y_total[highest_indices_pred]
 
-        highest_indices_actual = np.argsort(y_total)[-topk:]
+        x_highest_pred_n = x_total[highest_indices_pred_n]
+        y_highest_pred_n = y_total[highest_indices_pred_n]
 
-        x_highest_actual = x_total[highest_indices_actual]
-        y_highest_actual = y_total[highest_indices_actual]
+        x_highest_actual_n = x_total[highest_indices_actual_n]
+        y_highest_actual_n = y_total[highest_indices_actual_n]
 
-        common_indices = np.intersect1d(highest_indices_pred, highest_indices_actual)
-        percentage_common = (len(common_indices) / len(highest_indices_pred)) * 100
+        x_highest_actual_1 = x_total[highest_indices_actual_1]
+        y_highest_actual_1 = y_total[highest_indices_actual_1]
+
+        common_indices = np.intersect1d(highest_indices_pred_n, highest_indices_actual_n)
+        percentage_common = (len(common_indices) / len(highest_indices_pred_n)) * 100
 
         num_pool_data = len(self.data_pool)
-        num_from_pool = np.sum(highest_indices_pred < num_pool_data)
-        num_from_known = len(highest_indices_pred) - num_from_pool
+        num_from_pool = np.sum(highest_indices_pred_n < num_pool_data)
+        num_from_known = len(highest_indices_pred_n) - num_from_pool
 
+        print(f'Actual highest simulations: X-{x_highest_actual_1}, Y-{y_highest_actual_1}')
+        print(f'Predic highest simulations: X-{x_total[highest_indices_pred_1]}, Y-{y_total[highest_indices_pred_1]}')
+
+        if x_highest_actual_1 in x_highest_pred_n:
+            print("---------The highest actual value is in the top predictions")
+        else:
+            print("The highest actual value is NOT in the top predictions---------")
         print(f'Percentage of common indices in top {topk} predictions: {percentage_common:.2f}%')
         print(f'Number of predictions from pool: {num_from_pool} | Number of predictions from known data: {num_from_known}')
 
-        return x_highest_pred, y_highest_pred, x_highest_actual, y_highest_actual
+        return x_highest_pred_n, y_highest_pred_n, x_highest_actual_n, y_highest_actual_n, x_highest_actual_1, y_highest_actual_1
 
 
 if __name__ == '__main__':
@@ -668,12 +684,12 @@ if __name__ == '__main__':
     parser.add_argument('-ps', '--prior_sigma', type=float, default=0.0000001, help='Prior sigma')
     parser.add_argument('-cw', '--complexity_weight', type=float, default=0.01, help='Complexity weight')
 
-    # DE
-    parser.add_argument('-es', '--ensemble_size', type=int, default=5, help='Number of models in the ensemble')
-
     # NNs
     parser.add_argument('-hs', '--hidden_size', type=int, default=4, help='Number of hidden units')
     parser.add_argument('-ln', '--layer_number', type=int, default=3, help='Number of layers')
+
+    # DE
+    parser.add_argument('-es', '--ensemble_size', type=int, default=5, help='Number of models in the ensemble')
 
     # Dropout
     parser.add_argument('-dp', '--dropout', type=float, default=0.5, help='Dropout rate')
@@ -681,10 +697,10 @@ if __name__ == '__main__':
     # GP
     parser.add_argument('-kl', '--kernel', type=str, default='RBF', help='Kernel function for GP: 1. RBF, 2. Matern, 3. Linear, 4. Cosine, 5. Periodic')
     parser.add_argument('-lpr', '--lengthscale_prior', type=str, default=None, help='Set prior for Lengthscale 1. Gamma 2. Normal') 
-    parser.add_argument('-npr', '--noise_prior', type=str, default=None, help='Set prior for Noise 1. Gamma 2. Normal') 
     parser.add_argument('-sls', '--lengthscale_sigma', type=float, default=0.2, help='Lengthscale Sigma for GP kernel')
-    parser.add_argument('-sns', '--noise_sigma', type=float, default=0.1, help='Noise Sigma for GP')
     parser.add_argument('-mls', '--lengthscale_mean', type=float, default=2.0, help='Lengthscale Mean for GP kernel')
+    parser.add_argument('-npr', '--noise_prior', type=str, default=None, help='Set prior for Noise 1. Gamma 2. Normal') 
+    parser.add_argument('-sns', '--noise_sigma', type=float, default=0.1, help='Noise Sigma for GP')
     parser.add_argument('-mns', '--noise_mean', type=float, default=1.1, help='Noise Mean for GP')
     parser.add_argument('-nc', '--noise_constraint', type=float, default=1e-3, help='Noise Constraint for GP')
     parser.add_argument('-tls', '--lengthscale_type', type=str, default='Single', help='Lengthscale Type for GP kernel 1. Single, 2. ARD')
@@ -718,20 +734,25 @@ if __name__ == '__main__':
                          for action in parser._actions if action.option_strings and action.option_strings[0] in opt_list]
     run_name = '_'.join(f"{abbr}{str(value)}" for abbr, value in option_value_list)
     
-    model = RunModel(args.model, args.hidden_size, args.layer_number, args.steps, args.epochs, args.dataset_type, args.sensor, args.scaling, args.samples_per_step, args.sampling_method,
-                     args.validation_size, args.learning_rate, args.active_learning, args.directory, args.verbose, run_name, args.complexity_weight, args.prior_sigma, args.ensemble_size,
-                    args.kernel, args.lengthscale_prior, args.lengthscale_sigma, args.lengthscale_mean, args.noise_prior, args.noise_sigma, args.noise_mean, args.noise_constraint,
-                     args.lengthscale_type, args.dropout)
+    model = RunModel(dataset_type=args.dataset_type, scaling=args.scaling, sensor=args.sensor, # Dataset parameters
+                     model_name=args.model, learning_rate=args.learning_rate, # Model parameters
+                     prior_sigma=args.prior_sigma, complexity_weight=args.complexity_weight, # BNN parameters
+                     hidden_size=args.hidden_size, layer_number=args.layer_number, # NN parameters
+                     ensemble_size=args.ensemble_size, # DE parameters
+                     dropout_rate=args.dropout, # MCD parameters
+                     kernel=args.kernel, lengthscale_prior=args.lengthscale_prior, lengthscale_sigma=args.lengthscale_sigma, lengthscale_mean=args.lengthscale_mean, noise_prior=args.noise_prior, noise_sigma=args.noise_sigma, noise_mean=args.noise_mean, noise_constraint=args.noise_constraint, lengthscale_type=args.lengthscale_type, # GP parameters
+                     active_learning=args.active_learning, steps=args.steps, epochs=args.epochs, samples_per_step=args.samples_per_step, sampling_method=args.sampling_method, validation_size=args.validation_size, topk=args.topk, # Active learning parameters
+                     directory=args.directory, verbose=args.verbose, run_name=run_name) # Output parameters
 
     # Iterate through the steps of active learning
     for step in range(model.steps):
         start_step = time.time()
         model.train_model(step) # Train the model
-        x_highest_pred, y_highest_pred, x_highest_actual, y_highest_actual = model.final_prediction(topk=args.topk) # Get the final predictions as if this was the last step
+        x_highest_pred_n, y_highest_pred_n, x_highest_actual_n, y_highest_actual_n, x_highest_actual_1, y_highest_actual_1 = model.final_prediction(topk=args.topk) # Get the final predictions as if this was the last step
         model.evaluate_pool_data(step) # Evaluate the model on the pool data
         means, stds = model.predict() # Predict the uncertainty on the pool data
         selected_indices = model.acquisition_function(means, stds, args.samples_per_step) # Select the next samples from the pool
-        model.plot(means, stds, selected_indices, step, x_highest_pred, y_highest_pred, x_highest_actual, y_highest_actual) # Plot the predictions and selected indices
+        model.plot(means, stds, selected_indices, step, x_highest_pred_n, y_highest_pred_n, x_highest_actual_n, y_highest_actual_n, x_highest_actual_1, y_highest_actual_1) # Plot the predictions and selected indices
         model.update_data(selected_indices) # Update the known and pool data
 
         print(f'Updated pool and known data (AL = {args.active_learning}):', model.data_pool.shape, model.data_known.shape)
@@ -740,7 +761,7 @@ if __name__ == '__main__':
 
 # BNN: -v -ln 3 -hs 4 -ps 0.0000001 -cw 0.001 -dr v1 -al UCB -s 5 -e 100
 # DE: -v -m DE -vs 0.2 -es 2
-# MCD: -v -m MCD -vs 0.2 -hs 20 -ln 5
+# MCD: -v -m MCD -vs 0.2 -hs 20 -ln 5 -dp
 # GP:
 # -v -m GP -sc Minmax -lr 0.1 -al US -s 10 -e 150 -ss 25 -vs 0.2 -kl Matern 
 # -v -m GP -sc Minmax -lr 0.1 -al US -s 10 -e 150 -ss 25 -vs 0.2 -kl RBF
