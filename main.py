@@ -666,6 +666,39 @@ class RunModel:
         print(f'Number of predictions from pool: {num_from_pool} | Number of predictions from known data: {num_from_known}')
 
         return x_highest_pred_n, y_highest_pred_n, x_highest_actual_n, y_highest_actual_n, x_highest_actual_1, y_highest_actual_1
+    
+    import numpy as np
+
+# Stopping criterion for active learning
+def estimate_mutual_information(model, pool_data):
+    """
+    Estimate mutual information between observed data in the GP model and unobserved points.
+    
+    :param gp: A GaussianProcess model that has been fit to observed data.
+    :param pool_data: A numpy array of shape (n_unobserved, n_features) for unobserved points.
+    :param noise_variance: Variance of the observation noise.
+    :return: Estimated mutual information.
+    """
+    # Noise variance of the GP model
+    noise_variance = model.likelihood.noise_covar.noise.item()
+
+    # Calculate the posterior predictive covariance matrix of unobserved points
+    Sigma_Y_X = model.posterior_predictive_covariance(pool_data)
+    
+    # Calculate the determinant part |I + sigma^{-2} * Sigma_{Y|X}|
+    det_part = np.linalg.det(np.eye(Sigma_Y_X.shape[0]) + (1 / noise_variance) * Sigma_Y_X)
+    
+    # Calculate and return the mutual information
+    mutual_information = 0.5 * np.log(det_part)
+    return mutual_information
+
+# Example usage:
+# gp = GaussianProcess(...)  # Your GaussianProcess model fitted to observed data
+# X_unobserved = np.array([...])  # Unobserved data points you want to estimate MI for
+# mi_estimate = estimate_mutual_information(gp, X_unobserved)
+
+
+
 
 
 if __name__ == '__main__':
