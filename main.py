@@ -637,7 +637,6 @@ class RunModel:
         highest_indices_actual_n = np.argsort(y_total)[-topk:]
         highest_indices_actual_1 = np.argsort(y_total)[-1]
 
-
         x_highest_pred_n = x_total[highest_indices_pred_n]
         y_highest_pred_n = y_total[highest_indices_pred_n]
 
@@ -657,7 +656,7 @@ class RunModel:
         print(f'Actual highest simulations: X-{x_highest_actual_1}, Y-{y_highest_actual_1}')
         print(f'Predic highest simulations: X-{x_total[highest_indices_pred_1]}, Y-{y_total[highest_indices_pred_1]}')
 
-        if x_highest_actual_1 in x_highest_pred_n:
+        if any(np.array_equal(row, x_highest_actual_1) for row in x_highest_actual_n):
             print("---------The highest actual value is in the top predictions")
             #pd.DataFrame(x_highest_actual_1).to_csv('x_highest_actual_1.csv')
             #pd.DataFrame(x_highest_pred_n).to_csv('x_highest_pred_n.csv')
