@@ -35,7 +35,8 @@ class RunModel:
                 dropout_rate,
                 kernel, lengthscale_prior, lengthscale_sigma, lengthscale_mean, noise_prior, noise_sigma, noise_mean, noise_constraint, lengthscale_type,
                 active_learning, steps, epochs, samples_per_step, sampling_method, validation_size, topk,
-                directory, verbose, run_name):
+                directory, verbose, run_name,
+                fixed_budget, budget):
 
         # Configs
         self.run_name = run_name # Name of the run
@@ -55,6 +56,8 @@ class RunModel:
         self.steps = steps # Number of steps for the active learning
         self.epochs = epochs # Number of epochs per step of active learning
         self.validation_size = validation_size # Size of the validation set in percentage
+        self.fixed_budget = fixed_budget # Fixed budget or not
+        self.budget = budget # Budget for the fixed budget case
 
         # Initialize the model and optimizer
         self.learning_rate = learning_rate # Learning rate for the optimizer
@@ -747,6 +750,8 @@ if __name__ == '__main__':
     parser.add_argument('-sm', '--sampling_method', type=str, default='Random', help='Sampling method for initial samples. 1. Random, 2. LHC')
     parser.add_argument('-vs', '--validation_size', type=float, default=0, help='Size of the validation set in percentage')
     parser.add_argument('-t', '--topk', type=int, default=33, help='Number of top predictions to be selected')
+    parser.add_argument('-fb', '--fixed_budget', type=bool, default=True, help='Fixed budget for active learning')
+    parser.add_argument('-bgt', '--budget', type=int, default=1000, help='Number of simulations to be run in fixed budget')
     
     # Output parameters    
     parser.add_argument('-dr', '--directory', type=str, default='_plots', help='Sub-directory to save the ouputs')
@@ -776,28 +781,35 @@ if __name__ == '__main__':
                      dropout_rate=args.dropout, # MCD parameters
                      kernel=args.kernel, lengthscale_prior=args.lengthscale_prior, lengthscale_sigma=args.lengthscale_sigma, lengthscale_mean=args.lengthscale_mean, noise_prior=args.noise_prior, noise_sigma=args.noise_sigma, noise_mean=args.noise_mean, noise_constraint=args.noise_constraint, lengthscale_type=args.lengthscale_type, # GP parameters
                      active_learning=args.active_learning, steps=args.steps, epochs=args.epochs, samples_per_step=args.samples_per_step, sampling_method=args.sampling_method, validation_size=args.validation_size, topk=args.topk, # Active learning parameters
-                     directory=args.directory, verbose=args.verbose, run_name=run_name) # Output parameters
+                     directory=args.directory, verbose=args.verbose, run_name=run_name,
+                     fixed_budget=args.fixed_budget, budget=args.budget) # Output parameters
+                    
 
     # Iterate through the steps of active learning
+    
     for step in range(model.steps):
-        start_step = time.time()
-        model.train_model(step) # Train the model
-        x_highest_pred_n, y_highest_pred_n, x_highest_actual_n, y_highest_actual_n, x_highest_actual_1, y_highest_actual_1 = model.final_prediction(topk=args.topk) # Get the final predictions as if this was the last step
-        model.evaluate_pool_data(step) # Evaluate the model on the pool data
-        means, stds = model.predict() # Predict the uncertainty on the pool data
-        selected_indices = model.acquisition_function(means, stds, args.samples_per_step) # Select the next samples from the pool
-        model.plot(means, stds, selected_indices, step, x_highest_pred_n, y_highest_pred_n, x_highest_actual_n, y_highest_actual_n, x_highest_actual_1, y_highest_actual_1) # Plot the predictions and selected indices
-        model.update_data(selected_indices) # Update the known and pool data
+        if (model.fixed_budget and model.budget >= step * args.samples_per_step) or not model.fixed_budget:
+            start_step = time.time()
+            model.train_model(step) # Train the model
+            x_highest_pred_n, y_highest_pred_n, x_highest_actual_n, y_highest_actual_n, x_highest_actual_1, y_highest_actual_1 = model.final_prediction(topk=args.topk) # Get the final predictions as if this was the last step
+            model.evaluate_pool_data(step) # Evaluate the model on the pool data
+            means, stds = model.predict() # Predict the uncertainty on the pool data
+            selected_indices = model.acquisition_function(means, stds, args.samples_per_step) # Select the next samples from the pool
+            model.plot(means, stds, selected_indices, step, x_highest_pred_n, y_highest_pred_n, x_highest_actual_n, y_highest_actual_n, x_highest_actual_1, y_highest_actual_1) # Plot the predictions and selected indices
+            model.update_data(selected_indices) # Update the known and pool data
 
-        print(f'Updated pool and known data (AL = {args.active_learning}):', model.data_pool.shape, model.data_known.shape)
-        print(f'Step: {step+1} of {model.steps} | {time.time() - start_step:.2f} seconds')
-        print('--------------------------------')
+            print(f'Updated pool and known data (AL = {args.active_learning}):', model.data_pool.shape, model.data_known.shape)
+            print(f'Step: {step+1} of {model.steps} | {time.time() - start_step:.2f} seconds')
+            print('--------------------------------')
+        else:
+            print(f'Budget exhausted at Step {step+1} of {model.steps} | {model.data_known.shape[0]} simulations were run.')
+            break
 
 # BNN: -v -ln 3 -hs 4 -ps 0.0000001 -cw 0.001 -dr v1 -al UCB -s 5 -e 100
 # DE: -v -m DE -vs 0.2 -es 2
 # MCD: -v -m MCD -vs 0.2 -hs 20 -ln 5 -dp
 # GP:
-# -v -m GP -sc Minmax -lr 0.1 -al US -s 10 -e 150 -ss 25 -vs 0.2 -kl Matern 
+# -v -m GP -sc Minmax -lr 0.1 -al US -s 10 -e 150 -ss 33 -vs 0.2 -kl Matern -fb True -bgt 300
 # -v -m GP -sc Minmax -lr 0.1 -al US -s 10 -e 150 -ss 25 -vs 0.2 -kl RBF
 # -v -m GP -sc Minmax -lr 0.1 -al US -s 10 -e 150 -ss 25 -vs 0.2 -kl Linear
 # -v -m GP -sc Minmax -lr 0.1 -al US -s 10 -e 150 -ss 25 -vs 0.2 -kl Cosine
