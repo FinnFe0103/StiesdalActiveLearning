@@ -426,26 +426,27 @@ class RunModel:
     def evaluate_pool_data(self, step): # 2. Evaluate the model on the pool data
         # Convert pool data to PyTorch tensors and move them to the correct device
         x_pool_torch = torch.tensor(self.data_pool[:, :-1]).to(self.device)
-        y_pool_torch = torch.tensor(self.data_pool[:, -1]).to(self.device) #.view(-1, 1).to(self.device); y pool torch: [observations, ]
+        y_pool_torch = torch.tensor(self.data_pool[:, -1]).to(self.device) # [observations, ]
 
         if self.model_name == 'BNN':
             self.model.eval()  # Set the model to evaluation mode
             with torch.no_grad():  # No need to calculate gradients
-                predictions = self.model(x_pool_torch)
-                mse = self.mse(predictions.mean.reshape(-1, 1), y_pool_torch) # Compute MSE Loss for GP
-                mae = self.mae(predictions.mean, y_pool_torch)
+                predictions = self.model(x_pool_torch).squeeze() # [observations, ]
+                mse = self.mse(predictions, y_pool_torch)
+                mae = self.mae(predictions, y_pool_torch)
                 
         elif self.model_name == 'GP':
             self.model.eval()  # Set the model to evaluation mode
             with torch.no_grad():  # No need to calculate gradients
                 self.likelihood.eval()  # Also set the likelihood to evaluation mode
-                prediction = self.model(x_pool_torch) # Add unsqueeze to match expected dimensions; [observations, ]
-                predictions = self.likelihood(prediction)  # Get the predictive posterior; [observations, ]
+                prediction = self.model(x_pool_torch) # [observations, ]
+                predictions = self.likelihood(prediction)  # [observations, ]
                 mse = self.mse(predictions.mean, y_pool_torch) 
                 mae = self.mae(predictions.mean, y_pool_torch)
 
         elif self.model_name == 'SVR':
             predictions = self.model.predict(self.data_pool[:, :-1])
+            print('EVALUATE POOL SHAPES', predictions.shape, self.data_pool[:, -1].shape)
             mse = self.mse(predictions, self.data_pool[:, -1])
             mae = self.mae(predictions, self.data_pool[:, -1])
 
@@ -457,6 +458,7 @@ class RunModel:
                 predictions = np.mean(predictions, axis=0)
                 mse = self.mse(torch.tensor(predictions).to(self.device), y_pool_torch.squeeze())
                 mae = self.mae(torch.tensor(predictions).to(self.device), y_pool_torch.squeeze())
+
         elif self.model_name == 'MCD':
             #self.model.eval()  # DO NOT PUT IN EVALUATION MODE; OTHERWISE DROPOUT WILL NOT WORK
             with torch.no_grad():
@@ -472,7 +474,6 @@ class RunModel:
             print(f'Step: {step + 1} | Pool-Loss: {mse.item()}')
     
     def predict(self, samples=500): # 3. Predict the mean and std (uncertainty) on the pool data
-
         x_pool = self.data_pool[:, :-1]
         x_pool_torch = torch.tensor(x_pool).to(self.device)
 
@@ -481,8 +482,8 @@ class RunModel:
             with torch.no_grad():
                 preds = [self.model(x_pool_torch) for _ in range(samples)]
             preds = torch.stack(preds)  # Shape: [samples, N, output_dim]
-            means = preds.mean(dim=0).detach().cpu().numpy()  # calculate the mean of the predictions
-            stds = preds.std(dim=0).detach().cpu().numpy()  # calculate the standard deviation of the predictions
+            means = preds.mean(dim=0).squeeze().detach().cpu().numpy()  # calculate the mean of the predictions
+            stds = preds.std(dim=0).squeeze().detach().cpu().numpy()  # calculate the standard deviation of the predictions
         elif self.model_name == 'GP':
             self.model.eval()  # Set model to evaluation mode
             with torch.no_grad(), gpytorch.settings.fast_pred_var():
@@ -501,6 +502,7 @@ class RunModel:
                 preds = [model(x_pool_torch).clone().detach().cpu().numpy() for model in self.model]
                 means = np.mean(preds, axis=0)
                 stds = np.std(preds, axis=0)
+            print('MEANS, STDS:', means.shape, stds.shape)
         elif self.model_name == 'MCD':
             #self.model.eval() # DO NOT PUT IN EVALUATION MODE; OTHERWISE DROPOUT WILL NOT WORK
             with torch.no_grad():
@@ -525,7 +527,6 @@ class RunModel:
         return means, stds  # Return both the mean and standard deviation of predictions
 
     def acquisition_function(self, means, stds, samples_per_step, lambda_reg): # 4. Select the next samples from the pool
-        
         stds = stds.copy()
         means = means.copy()
 
@@ -533,7 +534,7 @@ class RunModel:
             selected_indices = random.sample(range(len(self.data_pool)), samples_per_step)
             return selected_indices
         elif self.active_learning == 'EX':  # Exploitation: next sample highest predictions
-            selected_index = means.squeeze().argsort()[-1]
+            selected_indices = np.argsort(means)[-samples_per_step:]
             return selected_indices
         
         best_y = np.max(self.data_known[:, -1])
@@ -570,32 +571,6 @@ class RunModel:
             counter += 1
 
         return selected_indices_this_step
-
-    def acquisition_function2(self, means, stds, samples_per_step): # 4. Select the next samples from the pool
-        best_y = np.max(self.data_known[:, -1])
-        
-        if self.active_learning == 'US': # Uncertainty Sampling
-            uncertainty = stds.squeeze() # Uncertainty is the standard deviation of the predictions
-            selected_indices = uncertainty.argsort()[-samples_per_step:] # Select the indices with the highest uncertainty
-        elif self.active_learning == 'RS': # Random Sampling
-            selected_indices = random.sample(range(len(self.data_pool)), samples_per_step)
-        elif self.active_learning == 'EI': # Expected Improvement
-            z = (means - best_y) / stds
-            ei = (means - best_y) * norm.cdf(z) + stds * norm.pdf(z)
-            selected_indices = ei.squeeze().argsort()[-samples_per_step:] # Select the indices with the highest EI
-        elif self.active_learning == 'PI': # Probability of Improvement
-            z = (means - best_y) / stds
-            pi = norm.cdf(z)
-            selected_indices = pi.squeeze().argsort()[-samples_per_step:] # Select the indices with the highest PI
-        elif self.active_learning == 'UCB': # Upper Confidence Bound
-            ucb = means + 2.0 * stds
-            selected_indices = ucb.squeeze().argsort()[-samples_per_step:] # Select the indices with the highest UCB
-        elif self.active_learning == 'EX': # Exploitation: next sample highest predictions
-            selected_indices = np.argsort(means)[-samples_per_step:]
-        else:
-            raise ValueError('Invalid acquisition function')
-        
-        return selected_indices
     
     def plot(self, means, stds, selected_indices, step, x_highest_pred_n, y_highest_pred_n, x_highest_actual_n, y_highest_actual_n, x_highest_actual_1, y_highest_actual_1): #4.1 Plot the predictions and selected indices
         x_pool = self.data_pool[:, :-1] # [observations, features]
@@ -658,7 +633,7 @@ class RunModel:
 
     def final_prediction(self, topk, samples=100):
         x_total = np.concatenate((self.data_pool[:, :-1], self.data_known[:, :-1]), axis=0)
-        y_total = np.concatenate((self.data_pool[:, -1], self.data_known[:, -1]), axis=0) # # y total torch: [observations, ]
+        y_total = np.concatenate((self.data_pool[:, -1], self.data_known[:, -1]), axis=0) # [observations, ]
 
         x_total_torch = torch.tensor(x_total).to(self.device)
         y_total_torch = torch.tensor(y_total).to(self.device)  # y pool torch: [observations, ]
@@ -667,10 +642,10 @@ class RunModel:
             self.model.eval()
             with torch.no_grad():
                 preds = [self.model(x_total_torch) for _ in range(samples)]
-            preds = torch.stack(preds)
-            means = preds.mean(dim=0).detach().cpu().numpy().squeeze()
-            mse = self.mse(preds.mean.reshape(-1, 1), y_total_torch) # Compute MSE Loss for GP
-            mae = self.mae(preds.mean.reshape(-1, 1), y_total_torch)
+            preds = torch.stack(preds) # [samples, observations, 1]
+            means = preds.mean(dim=0).detach().cpu().numpy().squeeze() # [observations, ]
+            mse = self.mse(torch.tensor(means), y_total_torch)
+            mae = self.mae(torch.tensor(means), y_total_torch)
         elif self.model_name == 'GP':
             self.model.eval()
             with torch.no_grad(), gpytorch.settings.fast_pred_var():
@@ -686,24 +661,26 @@ class RunModel:
                     sys.exit()
         elif self.model_name == 'SVR':
             means = self.model.predict(x_total)
-            mse = self.mse(preds, y_total)
-            mae = self.mae(preds, y_total)
+            mse = self.mse(means, y_total)
+            mae = self.mae(means, y_total)
         elif self.model_name == 'DE':
             for model in self.model:
                 model.eval()
             with torch.no_grad():
                 preds = [model(x_total_torch).clone().detach().cpu().numpy() for model in self.model]
             means = np.mean(preds, axis=0)
-            mse = self.mse(torch.tensor(preds).to(self.device), y_total_torch.squeeze())
-            mae = self.mae(torch.tensor(preds).to(self.device), y_total_torch.squeeze())
+            print('EVALUATE TOTAL SHAPES', means.shape, y_total.shape)
+            mse = self.mse(torch.tensor(means).to(self.device), y_total_torch.squeeze())
+            mae = self.mae(torch.tensor(means).to(self.device), y_total_torch.squeeze())
         elif self.model_name == 'MCD':
             #self.model.eval() # DO NOT PUT IN EVALUATION MODE; OTHERWISE DROPOUT WILL NOT WORK
             with torch.no_grad():
                 preds = [self.model(x_total_torch) for _ in range(samples)]
             preds = torch.stack(preds)
             means = preds.mean(dim=0).detach().cpu().numpy()
-            mse = self.mse(preds, y_total_torch.squeeze())
-            mae = self.mae(preds, y_total_torch.squeeze())
+            print('EVALUATE TOTAL SHAPES', means.shape, y_total.shape)
+            mse = self.mse(torch.tensor(means).to(self.device), y_total_torch.squeeze())
+            mae = self.mae(torch.tensor(means).to(self.device), y_total_torch.squeeze())
             
         highest_indices_pred_n = np.argsort(means)[-topk:]
         highest_indices_pred_1 = np.argsort(means)[-1]
@@ -800,6 +777,7 @@ if __name__ == '__main__':
     # Output parameters
     parser.add_argument('-dr', '--directory', type=str, default='_plots', help='Sub-directory to save the ouputs')
     parser.add_argument('-v', '--verbose', action='store_true', help='Print the model')
+    parser.add_argument('-plot', '--plot', action='store_true', help='Generate a plot of the output every step')
     
     args = parser.parse_args()
 
@@ -808,7 +786,7 @@ if __name__ == '__main__':
     elif args.model == 'GP':
         opt_list = ['-sc', '-lr', '-al', '-s', '-e', '-ss', '-vs', '-kl', '-lpr', '-npr', '-sls', '-sns', '-mls', '-mns', '-nc', '-tls', '-la']
     elif args.model == 'SVR':
-        opt_list = ['-sc', '-lr', '-al', '-s', '-e', '-ss', '-vs', '-la']
+        opt_list = ['-sc', '-al', '-s', '-e', '-ss', '-vs', '-la']
     elif args.model == 'DE':
         opt_list = ['-sc', '-hs', '-ln', '-lr', '-al', '-s', '-e', '-ss', '-vs', '-es', '-la']
     elif args.model == 'MCD':
@@ -828,34 +806,58 @@ if __name__ == '__main__':
                      directory=args.directory, verbose=args.verbose, run_name=run_name) # Output parameters
 
     # Iterate through the steps of active learning
-    result = pd.DataFrame(columns=['Step', 'MSE', 'MAE', 'Selected Indices', 'Percentage Common', 'Highest Actual Value in Top Predictions', 'Highest ACtual Value in Knonw Data'])
+    result = pd.DataFrame()
     for step in range(model.steps):
         start_step = time.time()
-        model.train_model(step) # Train the model
-        x_highest_pred_n, y_highest_pred_n, x_highest_actual_n, y_highest_actual_n, x_highest_actual_1, y_highest_actual_1, mse, mae, percentage_common, highest_actual_in_top, highest_actual_in_known = model.final_prediction(topk=args.topk) # Get the final predictions as if this was the last step
-        model.evaluate_pool_data(step) # Evaluate the model on the pool data
-        means, stds = model.predict() # Predict the uncertainty on the pool data
-        selected_indices = model.acquisition_function(means, stds, args.samples_per_step, args.lambda_reg) # Select the next samples from the pool
-        model.plot(means, stds, selected_indices, step, x_highest_pred_n, y_highest_pred_n, x_highest_actual_n, y_highest_actual_n, x_highest_actual_1, y_highest_actual_1) # Plot the predictions and selected indices
-        model.update_data(selected_indices) # Update the known and pool data
 
+        train_time = time.time()
+        model.train_model(step) # Train the model
+        print(f'---Training time: {time.time() - train_time:.2f} seconds')
+
+        fp_time = time.time()
+        x_highest_pred_n, y_highest_pred_n, x_highest_actual_n, y_highest_actual_n, x_highest_actual_1, y_highest_actual_1, mse, mae, percentage_common, highest_actual_in_top, highest_actual_in_known = model.final_prediction(topk=args.topk) # Get the final predictions as if this was the last step
+        print(f'---Final prediction time: {time.time() - fp_time:.2f} seconds')
+
+        ev_pool_time = time.time()
+        model.evaluate_pool_data(step) # Evaluate the model on the pool data
+        print(f'---Evaluation on pool data time: {time.time() - ev_pool_time:.2f} seconds')
+
+        predict_time = time.time()
+        means, stds = model.predict() # Predict the uncertainty on the pool data
+        print(f'---Prediction time: {time.time() - predict_time:.2f} seconds')
+
+        af_time = time.time()
+        selected_indices = model.acquisition_function(means, stds, args.samples_per_step, args.lambda_reg) # Select the next samples from the pool
+        print(f'---Acquisition function time: {time.time() - af_time:.2f} seconds')
+
+        if args.plot:
+            plot_time = time.time()
+            model.plot(means, stds, selected_indices, step, x_highest_pred_n, y_highest_pred_n, x_highest_actual_n, y_highest_actual_n, x_highest_actual_1, y_highest_actual_1) # Plot the predictions and selected indices
+            print(f'---Plotting time: {time.time() - plot_time:.2f} seconds')
+
+        update_time = time.time()
+        model.update_data(selected_indices) # Update the known and pool data
         print(f'Updated pool and known data (AL = {args.active_learning}):', model.data_pool.shape, model.data_known.shape)
+        print(f'---Update data time: {time.time() - update_time:.2f} seconds')
+
+        step_results = pd.DataFrame({'Step': [step+1], 'MSE': [mse], 'MAE': [mae], 'Selected Indices': [selected_indices], 'Percentage Common': [percentage_common], 'Highest Actual Value in Top Predictions': [highest_actual_in_top], 'Highest ACtual Value in Knonw Data': [highest_actual_in_known]})
+        result = pd.concat([result, pd.DataFrame({'Step': [step+1], 'MSE': [mse], 'MAE': [mae], 'Selected Indices': [selected_indices], 'Percentage Common': [percentage_common], 'Highest Actual Value in Top Predictions': [highest_actual_in_top], 'Highest ACtual Value in Knonw Data': [highest_actual_in_known]})], ignore_index=True)
+
         print(f'Step: {step+1} of {model.steps} | {time.time() - start_step:.2f} seconds')
         print('--------------------------------')
 
-        result = pd.concat([result, pd.DataFrame({'Step': [step+1], 'MSE': [mse], 'MAE': [mae], 'Selected Indices': [selected_indices], 'Percentage Common': [percentage_common], 'Highest Actual Value in Top Predictions': [highest_actual_in_top], 'Highest ACtual Value in Knonw Data': [highest_actual_in_known]})], ignore_index=True)
+    result.to_excel(f'{args.model}_{run_name}.xlsx', index=False)
+    print(f'Results saved to Excel file: {args.model}_{run_name}')
 
-    result.to_excel(f'{model.run_name}.xlsx', index=False)
-
-# BNN: -v -ln 3 -hs 4 -ps 0.0000001 -cw 0.001 -dr v1 -al UCB -s 5 -e 100
-# DE: -v -m DE -vs 0.2 -es 2
-# MCD: -v -m MCD -vs 0.2 -hs 20 -ln 5 -dp
-# GP:
-# -v -m GP -sc Minmax -lr 0.1 -al US -s 10 -e 150 -ss 25 -vs 0.2 -kl Matern 
-# -v -m GP -sc Minmax -lr 0.1 -al US -s 10 -e 150 -ss 25 -vs 0.2 -kl RBF
-# -v -m GP -sc Minmax -lr 0.1 -al US -s 10 -e 150 -ss 25 -vs 0.2 -kl Linear
-# -v -m GP -sc Minmax -lr 0.1 -al US -s 10 -e 150 -ss 25 -vs 0.2 -kl Cosine
-# -v -m GP -sc Minmax -lr 0.1 -al US -s 10 -e 150 -ss 25 -vs 0.2 -kl Periodic
-# -v -m GP -sc Minmax -lr 0.1 -al US -s 10 -e 150 -ss 25 -vs 0.2 -kl "RBF+Linear"
-# -v -m GP -sc Minmax -lr 0.1 -al US -s 10 -e 150 -ss 25 -vs 0.2 -kl "RBF+Cosine"
-    
+    # BNN: -v -m BNN -ln 3 -hs 4 -ps 0.0000001 -cw 0.001 -al UCB -s 5 -e 100
+    # DE: -v -m DE -es 2 -al UCB
+    # MCD: -v -m MCD -hs 20 -ln 5 -dp 0.5 -al UCB -s 5
+    # GP:
+    # -v -m GP -sc Minmax -lr 0.1 -al US -s 10 -e 150 -ss 25 -vs 0.2 -kl Matern
+    # -v -m GP -sc Minmax -lr 0.1 -al US -s 10 -e 150 -ss 25 -vs 0.2 -kl RBF
+    # -v -m GP -sc Minmax -lr 0.1 -al US -s 10 -e 150 -ss 25 -vs 0.2 -kl Linear
+    # -v -m GP -sc Minmax -lr 0.1 -al US -s 10 -e 150 -ss 25 -vs 0.2 -kl Cosine
+    # -v -m GP -sc Minmax -lr 0.1 -al US -s 10 -e 150 -ss 25 -vs 0.2 -kl Periodic
+    # -v -m GP -sc Minmax -lr 0.1 -al US -s 10 -e 150 -ss 25 -vs 0.2 -kl "RBF+Linear"
+    # -v -m GP -sc Minmax -lr 0.1 -al US -s 10 -e 150 -ss 25 -vs 0.2 -kl "RBF+Cosine"
+    # -v -m SVR -al EX -s 10 -e 150 -ss 25
