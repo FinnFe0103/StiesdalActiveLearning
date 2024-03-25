@@ -122,29 +122,27 @@ class Dataprep:
             y_selected = y[indices]
             x_pool = np.delete(x, indices, axis=0)
             y_pool = np.delete(y, indices, axis=0)
-        
 
+        # if x.ndim == 1:
+        #     plt.scatter(x, y, c="blue", label='Data points')
+        #     plt.scatter(x_selected, y_selected, c="red", label='Selected Samples')
+        #     plt.title('K-Means Clustering with Selected Samples')
+        #     plt.xlabel('X variable')
+        #     plt.ylabel('Y variable')
+        #     plt.legend(fontsize='small')
+        #     plt.savefig('_plots/selected.png')
+        # else:
+        #     pca = PCA(n_components=1)
+        #     data_plot = pca.fit_transform(x).squeeze()
 
-        if x.ndim == 1:
-            plt.scatter(x, y, c="blue", label='Data points')
-            plt.scatter(x_selected, y_selected, c="red", label='Selected Samples')
-            plt.title('K-Means Clustering with Selected Samples')
-            plt.xlabel('X variable')
-            plt.ylabel('Y variable')
-            plt.legend(fontsize='small')
-            plt.savefig('_plots/selected.png')
-        else:
-            pca = PCA(n_components=1)
-            data_plot = pca.fit_transform(x).squeeze()
-
-            # Plotting
-            plt.scatter(data_plot[:], y, c='lightgray', s=30, label='Data points')
-            plt.scatter(data_plot[indices], y[indices], c='blue', s=50, label='Selected Samples')
-            plt.title('K-Means Clustering with Selected Samples')
-            plt.xlabel('Principal Component 1')
-            plt.ylabel('Sensor output')
-            plt.legend(fontsize='small')
-            plt.savefig('_plots/selected.png')
+        #     # Plotting
+        #     plt.scatter(data_plot[:], y, c='lightgray', s=30, label='Data points')
+        #     plt.scatter(data_plot[indices], y[indices], c='blue', s=50, label='Selected Samples')
+        #     plt.title('K-Means Clustering with Selected Samples')
+        #     plt.xlabel('Principal Component 1')
+        #     plt.ylabel('Sensor output')
+        #     plt.legend(fontsize='small')
+        #     plt.savefig('_plots/selected.png')
 
         data_known = np.column_stack((x_selected, y_selected))
         data_pool = np.column_stack((x_pool, y_pool))
