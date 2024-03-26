@@ -23,8 +23,6 @@ from sklearn.metrics import mean_squared_error, mean_absolute_error
 from sklearn.model_selection import GridSearchCV
 from sklearn.neighbors import KernelDensity
 from torch.utils.tensorboard import SummaryWriter
-from scipy.stats import kstest
-from scipy.interpolate import interp1d
 
 # Module imports
 from data import Dataprep, load_data
