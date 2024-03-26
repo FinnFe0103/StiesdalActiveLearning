@@ -23,47 +23,59 @@ from sklearn.metrics import mean_squared_error, mean_absolute_error
 from sklearn.model_selection import GridSearchCV
 from sklearn.neighbors import KernelDensity
 from torch.utils.tensorboard import SummaryWriter
-
 # Module imports
 from data import Dataprep, load_data
 from Models.BNN import BayesianNetwork
 from Models.ExactGP import ExactGPModel
 from Models.Ensemble import Ensemble
 from Models.Dropout import Dropout
+
 class RunModel:
-    def __init__(self, dataset_type, scaling, sensor,
-                model_name, learning_rate,
-                prior_sigma, complexity_weight,
-                hidden_size, layer_number,
-                ensemble_size, 
-                dropout_rate,
-                kernel, lengthscale_prior, lengthscale_sigma, lengthscale_mean, noise_prior, noise_sigma, noise_mean, noise_constraint, lengthscale_type,
-                active_learning, steps, epochs, samples_per_step, sampling_method, validation_size, topk,
-                directory, verbose, run_name):
+    def __init__(self, model_name, run_name, dataset_type='Caselist', scaling=None, sensor='foundation_origin xy FloaterOffset [m]',
+                learning_rate=None,
+                prior_sigma=None, complexity_weight=None,
+                hidden_size=None, layer_number=None,
+                ensemble_size=None, 
+                dropout_rate=None,
+                kernel=None, lengthscale_prior=None, lengthscale_sigma=None, lengthscale_mean=None, noise_prior=None, noise_sigma=None, noise_mean=None, noise_constraint=None, lengthscale_type=None,
+                acquisition_function=None, lambda_reg=None, steps=None, epochs=None, samples_per_step=33, sampling_method='Random', validation_size=0.0, topk=33,
+                verbose=False):
+
+        print("All received arguments:", locals())
 
         # Configs
         self.run_name = run_name # Name of the run
         self.verbose = verbose # Print outputs
         os.makedirs('_plots', exist_ok=True) # Directory to save the outputs
         current_time = datetime.datetime.now().strftime("%H%M%S") # Unique directory based on datetime for each run
-        log_dir = os.path.join('Models/runs', model_name, directory, current_time + '_' + run_name)
+        log_dir = os.path.join('/runs', current_time + '_' + run_name)
         self.writer = SummaryWriter(log_dir) # TensorBoard
-        print('Run saved under:', log_dir)
+        print('Run saved under:', log_dir) 
+
 
         # Data parameters
         self.data = Dataprep(dataset_type, sensor, scaling=scaling, initial_samplesize=samples_per_step, sampling_method=sampling_method)
         self.data_known, self.data_pool = self.data.data_known, self.data.data_pool
 
         # Active learning parameters
-        self.active_learning = active_learning # Which acquisition function to use
+        self.active_learning = acquisition_function # Which acquisition function to use
+        self.lambda_reg = lambda_reg # Regularization parameter for the acquisition function
         self.steps = steps # Number of steps for the active learning
         self.epochs = epochs # Number of epochs per step of active learning
+        self.samples_per_step = samples_per_step # Number of samples to select per step
         self.validation_size = validation_size # Size of the validation set in percentage
+        self.topk = topk # Number of top samples to select from the pool
 
         # Initialize the model and optimizer
         self.learning_rate = learning_rate # Learning rate for the optimizer
         self.model_name = model_name # Name of the model
-        self.init_model(self.data_known.shape[1]-1, hidden_size, layer_number, prior_sigma, complexity_weight, ensemble_size, dropout_rate) # Initialize the model
+        self.hidden_size = hidden_size
+        self.layer_number = layer_number
+        self.prior_sigma = prior_sigma
+        self.complexity_weight = complexity_weight
+        self.ensemble_size = ensemble_size
+        self.dropout_rate = dropout_rate
+        self.init_model(self.data_known.shape[1]-1) # Initialize the model
         self.device = torch.device('mps' if torch.backends.mps.is_available() and self.model_name != 'GP' else 'cpu') #and self.model_name != 'DE' 
         print(f'Using {self.device} for training')
         
@@ -153,11 +165,10 @@ class RunModel:
 
         return kde_pdf
 
-
-    def init_model(self, input_dim, hidden_size, layer_number, prior_sigma, complexity_weight, ensemble_size, dropout_rate): # 0.1 Initialize the model
+    def init_model(self, input_dim): # 0.1 Initialize the model
         if self.model_name == 'BNN':
-            self.complexity_weight = complexity_weight # Complexity weight for ELBO
-            self.model = BayesianNetwork(input_dim, hidden_size, layer_number, prior_sigma)
+            self.complexity_weight = self.complexity_weight # Complexity weight for ELBO
+            self.model = BayesianNetwork(input_dim, self.hidden_size, self.layer_number, self.prior_sigma)
             self.init_optimizer_criterion() # Initialize the optimizer
         elif self.model_name == 'GP': # Model and optimizer are initialized in the training step
             self.model = None
@@ -167,10 +178,10 @@ class RunModel:
             self.model = SVR(kernel='rbf', C=5, epsilon=0.05)
             self.init_optimizer_criterion() # Initialize the optimizer
         elif self.model_name == 'DE':
-            self.model = [Ensemble(input_dim, hidden_size, layer_number) for _ in range(ensemble_size)]
+            self.model = [Ensemble(input_dim, self.hidden_size, self.layer_number) for _ in range(self.ensemble_size)]
             self.init_optimizer_criterion() # Initialize the optimizer
         elif self.model_name == 'MCD':
-            self.model = Dropout(input_dim, hidden_size, layer_number, dropout_rate)
+            self.model = Dropout(input_dim, self.hidden_size, self.layer_number, self.dropout_rate)
             self.init_optimizer_criterion()
     
     def init_optimizer_criterion(self): # 0.2 Initialize the optimizer
@@ -606,15 +617,15 @@ class RunModel:
 
         return means, stds  # Return both the mean and standard deviation of predictions
 
-    def acquisition_function(self, means, stds, samples_per_step, lambda_reg): # 4. Select the next samples from the pool
+    def acquisition_function(self, means, stds): # 4. Select the next samples from the pool
         stds = stds.copy()
         means = means.copy()
 
         if self.active_learning == 'RS': # Random Sampling
-            selected_indices = random.sample(range(len(self.data_pool)), samples_per_step)
+            selected_indices = random.sample(range(len(self.data_pool)), self.samples_per_step)
             return selected_indices
         elif self.active_learning == 'EX':  # Exploitation: next sample highest predictions
-            selected_indices = np.argsort(means)[-samples_per_step:]
+            selected_indices = np.argsort(means)[-self.samples_per_step:]
             return selected_indices
         
         best_y = np.max(self.data_known[:, -1])
@@ -622,22 +633,22 @@ class RunModel:
         
         selected_indices_this_step = []
         counter = 0
-        for _ in range(samples_per_step):
+        for _ in range(self.samples_per_step):
             if selected_indices_this_step:
                 current_min_distances = distance_matrix[:, selected_indices_this_step].min(axis=1)
             else:
                 current_min_distances = np.zeros(len(self.data_pool))  # No diversity penalty if no points have been selected yet
 
             if self.active_learning == 'US':  # Uncertainty Sampling
-                scores = stds + lambda_reg * current_min_distances
+                scores = stds + self.lambda_reg * current_min_distances
             elif self.active_learning == 'EI':  # Expected Improvement
                 z = (means - best_y) / stds
-                scores = (means - best_y) * norm.cdf(z) + stds * norm.pdf(z) + lambda_reg * current_min_distances
+                scores = (means - best_y) * norm.cdf(z) + stds * norm.pdf(z) + self.lambda_reg * current_min_distances
             elif self.active_learning == 'PI':  # Probability of Improvement
                 z = (means - best_y) / stds
-                scores = norm.cdf(z) + lambda_reg * current_min_distances
+                scores = norm.cdf(z) + self.lambda_reg * current_min_distances
             elif self.active_learning == 'UCB':  # Upper Confidence Bound
-                scores = means + 2.0 * stds + lambda_reg * current_min_distances
+                scores = means + 2.0 * stds + self.lambda_reg * current_min_distances
             else:
                 raise ValueError('Invalid acquisition function')
 
@@ -684,9 +695,9 @@ class RunModel:
         plt.scatter(x_highest_pred_n, y_highest_pred_n, c="purple", marker="o", alpha=0.8)
         plt.scatter(x_highest_actual_n, y_highest_actual_n, c="orange", marker="o", alpha=0.1)
         plt.scatter(x_highest_actual_1, y_highest_actual_1, c="red", marker="o", alpha=0.1)
-        plt.title(self.run_name.replace("_", " ") + f' | Step {step + 1}', fontsize=10)
+        plt.title(self.run_name.replace("_", " ") + f' | Step {step + 1}', fontsize=6)
         plt.xlabel('1 Principal Component' if pca_applied else 'x')
-        plt.legend(['Mean prediction', 'Confidence Interval', 'Pool data (unseen)', 'Seen data', 'Selected data', 'Final Prediction'], fontsize=8)
+        plt.legend(['Mean prediction', 'Confidence Interval', 'Pool data (unseen)', 'Seen data', 'Selected data', 'Final Prediction', 'Highest Actual'], fontsize=8)
         plt.close(fig)
 
         # Log the table figure
@@ -733,7 +744,7 @@ class RunModel:
         self.data_known = np.append(self.data_known, self.data_pool[selected_indices], axis=0)
         self.data_pool = np.delete(self.data_pool, selected_indices, axis=0)
 
-    def final_prediction(self, topk, samples=100):
+    def final_prediction(self, step, samples=100):
         x_total = np.concatenate((self.data_pool[:, :-1], self.data_known[:, :-1]), axis=0)
         y_total = np.concatenate((self.data_pool[:, -1], self.data_known[:, -1]), axis=0) # [observations, ]
 
@@ -784,9 +795,9 @@ class RunModel:
             mse = self.mse(torch.tensor(means).to(self.device), y_total_torch.squeeze())
             mae = self.mae(torch.tensor(means).to(self.device), y_total_torch.squeeze())
             
-        highest_indices_pred_n = np.argsort(means)[-topk:]
+        highest_indices_pred_n = np.argsort(means)[-self.topk:]
         highest_indices_pred_1 = np.argsort(means)[-1]
-        highest_indices_actual_n = np.argsort(y_total)[-topk:]
+        highest_indices_actual_n = np.argsort(y_total)[-self.topk:]
         highest_indices_actual_1 = np.argsort(y_total)[-1]
 
         x_highest_pred_n = x_total[highest_indices_pred_n]
@@ -811,24 +822,28 @@ class RunModel:
 
         highest_actual_in_top = False
         if any(np.array_equal(row, x_highest_actual_1) for row in x_highest_pred_n):
-            print("FOUND: The highest actual value is in the top predictions")
             highest_actual_in_top = True
+            if self.verbose:
+                print("FOUND: The highest actual value is in the top predictions")
         else:
-            print("NOT FOUND: The highest actual value is not in the top predictions")
-        print(f'Percentage of common indices in top {topk} predictions: {percentage_common:.2f}%')
-        print(f'Number of predictions from pool: {num_from_pool} | Number of predictions from known data: {num_from_known}')
+            if self.verbose:
+                print("NOT FOUND: The highest actual value is not in the top predictions")
+        if self.verbose:
+            print(f'Percentage of common indices in top {self.topk} predictions: {percentage_common:.2f}%')
+            print(f'Number of predictions from pool: {num_from_pool} | Number of predictions from known data: {num_from_known}')
 
         highest_actual_in_known = False
         if any(np.array_equal(row, x_highest_actual_1) for row in self.data_known[:, :-1]):
-            print("KNOWN: The highest actual value is in the known data")
             highest_actual_in_known = True
+            if self.verbose:
+                print("KNOWN: The highest actual value is in the known data")
         else:
-            print("NOT KNOWN: The highest actual value is not in the known data")
+            if self.verbose:
+                print("NOT KNOWN: The highest actual value is not in the known data")
         
         self.y_total_predicted = means
         self.set_predicted_pdf()
         
-
         return x_highest_pred_n, y_highest_pred_n, x_highest_actual_n, y_highest_actual_n, x_highest_actual_1, y_highest_actual_1, mse.item(), mae.item(), percentage_common, highest_actual_in_top, highest_actual_in_known
 
 
@@ -837,12 +852,12 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Run the BNN model')
 
     # Dataset parameters
+    parser.add_argument('-m', '--model', type=str, default='BNN', help='1. BNN, 2. GP, 3. MCD, 4. DE, 5. SVM')
     parser.add_argument('-ds', '--dataset_type', type=str, default='Caselist', help='1. Generated_2000, 2. Caselist')
     parser.add_argument('-sc', '--scaling', type=str, default='Standard', help='Scaling to be used: 1. Standard, 2. Minmax, 3. None')
     parser.add_argument('-se', '--sensor', type=str, default='foundation_origin xy FloaterOffset [m]', help='Sensor to be predicted')
     
     # Model parameters
-    parser.add_argument('-m', '--model', type=str, default='BNN', help='1. BNN, 2. GP, 3. MCD, 4. DE, 5. SVM')
     parser.add_argument('-lr', '--learning_rate', type=float, default=0.01, help='Learning rate')
     
     # BNN
@@ -871,7 +886,7 @@ if __name__ == '__main__':
     parser.add_argument('-tls', '--lengthscale_type', type=str, default='Single', help='Lengthscale Type for GP kernel 1. Single, 2. ARD')
     
     # Active learning parameters
-    parser.add_argument('-al', '--active_learning', type=str, default='UCB', help='Type of active learning/acquisition function: 1. US, 2. RS, 3. EI, 4. PI, 5. UCB') # Uncertainty, Random, Expected Improvement, Probability of Improvement, Upper Confidence Bound
+    parser.add_argument('-af', '--acquisition_function', type=str, default='UCB', help='Type of active learning/acquisition function: 1. US, 2. RS, 3. EI, 4. PI, 5. UCB') # Uncertainty, Random, Expected Improvement, Probability of Improvement, Upper Confidence Bound
     parser.add_argument('-la', '--lambda_reg', type=float, default=0.01, help='Regularization parameter for uncertainty sampling')
     parser.add_argument('-s', '--steps', type=int, default=2, help='Number of steps')
     parser.add_argument('-e', '--epochs', type=int, default=100, help='Number of epochs')
@@ -901,15 +916,15 @@ if __name__ == '__main__':
                          for action in parser._actions if action.option_strings and action.option_strings[0] in opt_list]
     run_name = '_'.join(f"{abbr}{str(value)}" for abbr, value in option_value_list)
     
-    model = RunModel(dataset_type=args.dataset_type, scaling=args.scaling, sensor=args.sensor, # Dataset parameters
-                     model_name=args.model, learning_rate=args.learning_rate, # Model parameters
+    model = RunModel(model_name=args.model, run_name=run_name, dataset_type=args.dataset_type, scaling=args.scaling, sensor=args.sensor, # Dataset parameters
+                     learning_rate=args.learning_rate, # Model parameters
                      prior_sigma=args.prior_sigma, complexity_weight=args.complexity_weight, # BNN parameters
                      hidden_size=args.hidden_size, layer_number=args.layer_number, # NN parameters
                      ensemble_size=args.ensemble_size, # DE parameters
                      dropout_rate=args.dropout, # MCD parameters
                      kernel=args.kernel, lengthscale_prior=args.lengthscale_prior, lengthscale_sigma=args.lengthscale_sigma, lengthscale_mean=args.lengthscale_mean, noise_prior=args.noise_prior, noise_sigma=args.noise_sigma, noise_mean=args.noise_mean, noise_constraint=args.noise_constraint, lengthscale_type=args.lengthscale_type, # GP parameters
-                     active_learning=args.active_learning, steps=args.steps, epochs=args.epochs, samples_per_step=args.samples_per_step, sampling_method=args.sampling_method, validation_size=args.validation_size, topk=args.topk, # Active learning parameters
-                     directory=args.directory, verbose=args.verbose, run_name=run_name) # Output parameters
+                     acquisition_function=args.acquisition_function, lambda_reg=args.lambda_reg, steps=args.steps, epochs=args.epochs, samples_per_step=args.samples_per_step, sampling_method=args.sampling_method, validation_size=args.validation_size, topk=args.topk, # Active learning parameters
+                     directory=args.directory, verbose=args.verbose, plot=args.plot) # Output parameters
 
     # Iterate through the steps of active learning
     result = pd.DataFrame()
@@ -922,7 +937,7 @@ if __name__ == '__main__':
         print(f'---Training time: {time.time() - train_time:.2f} seconds')
 
         fp_time = time.time()
-        x_highest_pred_n, y_highest_pred_n, x_highest_actual_n, y_highest_actual_n, x_highest_actual_1, y_highest_actual_1, mse, mae, percentage_common, highest_actual_in_top, highest_actual_in_known = model.final_prediction(topk=args.topk) # Get the final predictions as if this was the last step
+        x_highest_pred_n, y_highest_pred_n, x_highest_actual_n, y_highest_actual_n, x_highest_actual_1, y_highest_actual_1, mse, mae, percentage_common, highest_actual_in_top, highest_actual_in_known = model.final_prediction(step) # Get the final predictions as if this was the last step
         print(f'---Final prediction time: {time.time() - fp_time:.2f} seconds')
 
         ev_pool_time = time.time()
@@ -934,7 +949,7 @@ if __name__ == '__main__':
         print(f'---Prediction time: {time.time() - predict_time:.2f} seconds')
 
         af_time = time.time()
-        selected_indices = model.acquisition_function(means, stds, args.samples_per_step, args.lambda_reg) # Select the next samples from the pool
+        selected_indices = model.acquisition_function(means, stds) # Select the next samples from the pool
         print(f'---Acquisition function time: {time.time() - af_time:.2f} seconds')
 
         # KL diveregence
@@ -949,7 +964,7 @@ if __name__ == '__main__':
 
         update_time = time.time()
         model.update_data(selected_indices) # Update the known and pool data
-        print(f'Updated pool and known data (AL = {args.active_learning}):', model.data_pool.shape, model.data_known.shape)
+        print(f'Updated pool and known data:', model.data_pool.shape, model.data_known.shape)
         print(f'---Update data time: {time.time() - update_time:.2f} seconds')
 
         step_results = pd.DataFrame({'Step': [step+1], 'MSE': [mse], 'MAE': [mae], 'Selected Indices': [selected_indices], 'Percentage Common': [percentage_common], 'Highest Actual Value in Top Predictions': [highest_actual_in_top], 'Highest Actual Value in Knonw Data': [highest_actual_in_known], 'KL-Divergence': [kl_divergence]})
