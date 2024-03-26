@@ -20,14 +20,16 @@ from sklearn.model_selection import train_test_split
 from sklearn.decomposition import PCA
 from sklearn.svm import SVR
 from sklearn.metrics import mean_squared_error, mean_absolute_error
+from sklearn.model_selection import GridSearchCV
+from sklearn.neighbors import KernelDensity
 from torch.utils.tensorboard import SummaryWriter
+
 # Module imports
 from data import Dataprep, load_data
 from Models.BNN import BayesianNetwork
 from Models.ExactGP import ExactGPModel
 from Models.Ensemble import Ensemble
 from Models.Dropout import Dropout
-
 class RunModel:
     def __init__(self, dataset_type, scaling, sensor,
                 model_name, learning_rate,
@@ -75,6 +77,82 @@ class RunModel:
         self.noise_mean = noise_mean
         self.noise_constraint = noise_constraint
         self.lengthscale_type = lengthscale_type
+
+        # KL Divergence
+        self.set_actual_pdf() # Set the actual PDF of the data
+
+
+    def set_actual_pdf(self):
+        y_total = np.concatenate((self.data_pool[:, -1], self.data_known[:, -1]), axis=0)
+        self.y_total_actual = y_total # [observations, ]
+
+        # Calculate the actual PDF of the data
+        kde_pdf = self.calc_kde_pdf(y_total)
+        self.pdf_p = kde_pdf
+        return
+    
+    def set_predicted_pdf(self):
+        # Calculate the predicted PDF of the data
+        kde_pdf = self.calc_kde_pdf(self.y_total_predicted)
+        self.pdf_q = kde_pdf
+        return
+    
+    def get_kl_divergence(self):
+        """
+        Calculate the KL divergence between two PDFs.
+
+        pdf_p: Callable PDF of the first distribution (e.g., actual y-values).
+        pdf_q: Callable PDF of the second distribution (e.g., predicted y-values).
+        x_points: Points at which to evaluate the PDFs and calculate the divergence.
+        """
+        # Assuming y_total_actual and y_total_predicted are already defined
+        y_min = np.min(self.y_total_actual)
+        y_max = np.max(self.y_total_actual)
+
+        # Extend the range slightly to ensure coverage of the tails
+        extend_factor = 0.1  # Extend by 10% of the range on both sides
+        range_extend = (y_max - y_min) * extend_factor
+        y_min_extended = y_min - range_extend
+        y_max_extended = y_max + range_extend
+
+        # Generate x_points
+        x_points = np.linspace(y_min_extended, y_max_extended, 1000)
+
+        # Points at which to evaluate the PDFs
+        p = self.pdf_p(x_points)
+        q = self.pdf_q(x_points)
+        # Ensure q is nonzero to avoid division by zero in log
+        q = np.maximum(q, np.finfo(float).eps)
+        
+        # Calculate the KL divergence
+        kl_divergence_for_plot = p * np.log(p / q) 
+        kl_divergence = np.sum(p * np.log(p / q)) * (x_points[1] - x_points[0])
+
+        return kl_divergence_for_plot, x_points, p, q, y_min_extended, y_max_extended, kl_divergence
+    
+    def calc_kde_pdf(self, y_data):
+        y_reshaped = y_data.reshape(-1, 1)  # Reshape data for KDE
+
+        # Extend the grid search to include multiple kernels and a broader range of bandwidths
+        params = {
+            'bandwidth': np.logspace(-2, 1, 30),  # Broader and more fine-grained range for bandwidth
+            'kernel': ['gaussian'] 
+        }
+        grid = GridSearchCV(KernelDensity(), params, cv=5)
+        grid.fit(y_reshaped)
+
+        # Use the best estimator to compute the KDE
+        kde = grid.best_estimator_
+
+        # Creating a PDF function based on KDE for multivariate data
+        def kde_pdf(x):
+            x_reshaped = np.atleast_2d(x).reshape(-1, 1)  # Ensure x is 2D for score_samples
+            log_dens = kde.score_samples(x_reshaped)
+            return np.exp(log_dens)
+        #print(f"Best bandwidth: {grid.best_estimator_.bandwidth}, Best kernel: {grid.best_estimator_.kernel}")
+
+        return kde_pdf
+
 
     def init_model(self, input_dim, hidden_size, layer_number, prior_sigma, complexity_weight, ensemble_size, dropout_rate): # 0.1 Initialize the model
         if self.model_name == 'BNN':
@@ -135,6 +213,8 @@ class RunModel:
             kernel = gpytorch.kernels.CosineKernel(ard_num_dims=ard_num_dims)
         elif kernel_type == 'Periodic':
             kernel = gpytorch.kernels.PeriodicKernel()
+        elif kernel_type == 'RationalQuadratic':
+            kernel = gpytorch.kernels.RQKernel(ard_num_dims=ard_num_dims)
         else:
             raise ValueError(f'Invalid kernel type: {kernel_type}')
 
@@ -572,7 +652,7 @@ class RunModel:
 
         return selected_indices_this_step
     
-    def plot(self, means, stds, selected_indices, step, x_highest_pred_n, y_highest_pred_n, x_highest_actual_n, y_highest_actual_n, x_highest_actual_1, y_highest_actual_1): #4.1 Plot the predictions and selected indices
+    def plot(self, means, stds, selected_indices, step, x_highest_pred_n, y_highest_pred_n, x_highest_actual_n, y_highest_actual_n, x_highest_actual_1, y_highest_actual_1, kl_divergence_for_plot, x_points, p, q, y_min_extended, y_max_extended): #4.1 Plot the predictions and selected indices
         x_pool = self.data_pool[:, :-1] # [observations, features]
         y_pool = self.data_pool[:, -1] # [observations]
         x_selected = self.data_known[:, :-1] # [observations, features]
@@ -626,6 +706,28 @@ class RunModel:
             plt.close(fig)
             
             self.writer.add_figure(f'First two PCs with selected datapoints {step + 1}', fig, step + 1)
+
+
+        # PDFs and KL divergence
+        fig, axs = plt.subplots(1, 2, figsize=(18, 6))
+
+        axs[0].plot(x_points, p, color='blue', label='Actual')
+        axs[0].plot(x_points, q, color='red', label='Predicted')
+        axs[0].legend(loc='upper right')
+        axs[0].set_title('PDFs of Actual and Predicted Data')
+        axs[0].set_xlabel('Data Points (Predicted and Actual Output)')
+        axs[0].set_ylabel('(Log-) Probability Density')
+
+        # Plot the KL divergence
+        axs[1].plot(x_points, kl_divergence_for_plot, color='purple')
+        axs[1].fill_between(x_points, kl_divergence_for_plot, color='purple', alpha=0.1)
+        axs[1].set_title('Pointwise KL Divergence')
+        axs[1].set_xlabel('Data Points (Predicted and Actual Output)')
+        axs[1].set_ylabel('Pointwise KL Divergence')
+
+        plt.tight_layout()
+        plt.close(fig)
+        self.writer.add_figure(f'PDFs and KL Divergence {step + 1}', fig, step + 1)
 
     def update_data(self, selected_indices): # 5. Update the known and pool data
         self.data_known = np.append(self.data_known, self.data_pool[selected_indices], axis=0)
@@ -722,6 +824,10 @@ class RunModel:
             highest_actual_in_known = True
         else:
             print("NOT KNOWN: The highest actual value is not in the known data")
+        
+        self.y_total_predicted = means
+        self.set_predicted_pdf()
+        
 
         return x_highest_pred_n, y_highest_pred_n, x_highest_actual_n, y_highest_actual_n, x_highest_actual_1, y_highest_actual_1, mse.item(), mae.item(), percentage_common, highest_actual_in_top, highest_actual_in_known
 
@@ -807,6 +913,7 @@ if __name__ == '__main__':
 
     # Iterate through the steps of active learning
     result = pd.DataFrame()
+
     for step in range(model.steps):
         start_step = time.time()
 
@@ -830,9 +937,14 @@ if __name__ == '__main__':
         selected_indices = model.acquisition_function(means, stds, args.samples_per_step, args.lambda_reg) # Select the next samples from the pool
         print(f'---Acquisition function time: {time.time() - af_time:.2f} seconds')
 
+        # KL diveregence
+        kl_time = time.time()
+        kl_divergence_for_plot, x_points, p, q, y_min_extended, y_max_extended, kl_divergence = model.get_kl_divergence()
+        print(f'---KL divergence time: {time.time() - kl_time:.2f} seconds')
+
         if args.plot:
             plot_time = time.time()
-            model.plot(means, stds, selected_indices, step, x_highest_pred_n, y_highest_pred_n, x_highest_actual_n, y_highest_actual_n, x_highest_actual_1, y_highest_actual_1) # Plot the predictions and selected indices
+            model.plot(means, stds, selected_indices, step, x_highest_pred_n, y_highest_pred_n, x_highest_actual_n, y_highest_actual_n, x_highest_actual_1, y_highest_actual_1, kl_divergence_for_plot, x_points, p, q, y_min_extended, y_max_extended) # Plot the predictions and selected indices
             print(f'---Plotting time: {time.time() - plot_time:.2f} seconds')
 
         update_time = time.time()
@@ -840,8 +952,8 @@ if __name__ == '__main__':
         print(f'Updated pool and known data (AL = {args.active_learning}):', model.data_pool.shape, model.data_known.shape)
         print(f'---Update data time: {time.time() - update_time:.2f} seconds')
 
-        step_results = pd.DataFrame({'Step': [step+1], 'MSE': [mse], 'MAE': [mae], 'Selected Indices': [selected_indices], 'Percentage Common': [percentage_common], 'Highest Actual Value in Top Predictions': [highest_actual_in_top], 'Highest ACtual Value in Knonw Data': [highest_actual_in_known]})
-        result = pd.concat([result, pd.DataFrame({'Step': [step+1], 'MSE': [mse], 'MAE': [mae], 'Selected Indices': [selected_indices], 'Percentage Common': [percentage_common], 'Highest Actual Value in Top Predictions': [highest_actual_in_top], 'Highest ACtual Value in Knonw Data': [highest_actual_in_known]})], ignore_index=True)
+        step_results = pd.DataFrame({'Step': [step+1], 'MSE': [mse], 'MAE': [mae], 'Selected Indices': [selected_indices], 'Percentage Common': [percentage_common], 'Highest Actual Value in Top Predictions': [highest_actual_in_top], 'Highest Actual Value in Knonw Data': [highest_actual_in_known], 'KL-Divergence': [kl_divergence]})
+        result = pd.concat([result, pd.DataFrame({'Step': [step+1], 'MSE': [mse], 'MAE': [mae], 'Selected Indices': [selected_indices], 'Percentage Common': [percentage_common], 'Highest Actual Value in Top Predictions': [highest_actual_in_top], 'Highest ACtual Value in Knonw Data': [highest_actual_in_known], 'KL-Divergence': [kl_divergence]})], ignore_index=True)
 
         print(f'Step: {step+1} of {model.steps} | {time.time() - start_step:.2f} seconds')
         print('--------------------------------')
