@@ -143,8 +143,6 @@ class RunModel:
         grid = GridSearchCV(KernelDensity(), params, cv=5)
         grid.fit(y_reshaped)
 
-        print(f"Best bandwidth: {grid.best_estimator_.bandwidth}, Best kernel: {grid.best_estimator_.kernel}")
-
         # Use the best estimator to compute the KDE
         kde = grid.best_estimator_
 
@@ -153,14 +151,7 @@ class RunModel:
             x_reshaped = np.atleast_2d(x).reshape(-1, 1)  # Ensure x is 2D for score_samples
             log_dens = kde.score_samples(x_reshaped)
             return np.exp(log_dens)
-
-        # Plot the results
-        #plt.fill_between(grid_points[:, 0], pdf, alpha=0.5)
-        #plt.plot(y_reshaped, np.full_like(y_reshaped, -0.01), '|k', markeredgewidth=1)
-        #plt.title('Kernel Density Estimation with Optimal Kernel and Bandwidth')
-        #plt.show()
-
-        print(f"Best bandwidth: {grid.best_estimator_.bandwidth}, Best kernel: {grid.best_estimator_.kernel}")
+        #print(f"Best bandwidth: {grid.best_estimator_.bandwidth}, Best kernel: {grid.best_estimator_.kernel}")
 
         return kde_pdf
 
@@ -963,8 +954,8 @@ if __name__ == '__main__':
         print(f'Updated pool and known data (AL = {args.active_learning}):', model.data_pool.shape, model.data_known.shape)
         print(f'---Update data time: {time.time() - update_time:.2f} seconds')
 
-        step_results = pd.DataFrame({'Step': [step+1], 'MSE': [mse], 'MAE': [mae], 'Selected Indices': [selected_indices], 'Percentage Common': [percentage_common], 'Highest Actual Value in Top Predictions': [highest_actual_in_top], 'Highest ACtual Value in Knonw Data': [highest_actual_in_known]})
-        result = pd.concat([result, pd.DataFrame({'Step': [step+1], 'MSE': [mse], 'MAE': [mae], 'Selected Indices': [selected_indices], 'Percentage Common': [percentage_common], 'Highest Actual Value in Top Predictions': [highest_actual_in_top], 'Highest ACtual Value in Knonw Data': [highest_actual_in_known]})], ignore_index=True)
+        step_results = pd.DataFrame({'Step': [step+1], 'MSE': [mse], 'MAE': [mae], 'Selected Indices': [selected_indices], 'Percentage Common': [percentage_common], 'Highest Actual Value in Top Predictions': [highest_actual_in_top], 'Highest Actual Value in Knonw Data': [highest_actual_in_known], 'KL-Divergence': [kl_divergence]})
+        result = pd.concat([result, pd.DataFrame({'Step': [step+1], 'MSE': [mse], 'MAE': [mae], 'Selected Indices': [selected_indices], 'Percentage Common': [percentage_common], 'Highest Actual Value in Top Predictions': [highest_actual_in_top], 'Highest ACtual Value in Knonw Data': [highest_actual_in_known], 'KL-Divergence': [kl_divergence]})], ignore_index=True)
 
         print(f'Step: {step+1} of {model.steps} | {time.time() - start_step:.2f} seconds')
         print('--------------------------------')
