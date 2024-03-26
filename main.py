@@ -48,10 +48,9 @@ class RunModel:
         self.verbose = verbose # Print outputs
         os.makedirs('_plots', exist_ok=True) # Directory to save the outputs
         current_time = datetime.datetime.now().strftime("%H%M%S") # Unique directory based on datetime for each run
-        log_dir = os.path.join('/runs', current_time + '_' + run_name)
+        log_dir = os.path.join('/runs', current_time + '_' + model_name) # fix run_name
         self.writer = SummaryWriter(log_dir) # TensorBoard
         print('Run saved under:', log_dir) 
-
 
         # Data parameters
         self.data = Dataprep(dataset_type, sensor, scaling=scaling, initial_samplesize=samples_per_step, sampling_method=sampling_method)

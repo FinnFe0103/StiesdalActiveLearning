@@ -137,7 +137,6 @@ for model_name, params_space in hyperparameter_spaces.items():
             print('--------------------------------')
 
         model_performance_summary.append(aggregated_results)
-        print(model_performance_summary)
 
 pd.DataFrame(model_performance_summary).to_excel('model_performance_summary.xlsx', index=False)
 
