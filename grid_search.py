@@ -19,7 +19,7 @@ hyperparameter_spaces = {
     'GP': {
         'scaling': ['Minmax', 'Standard'],
         'learning_rate': [0.01, 0.1],
-        'kernel': ['Matern', 'RBF', 'Linear', 'Cosine', 'Periodic', 'RBF+Linear', 'RBF+Cosine'],
+        'kernel': ['Matern', 'RBF'],#, 'Linear', 'Cosine', 'Periodic', 'RBF+Linear', 'RBF+Cosine'],
         'lengthscale_prior': [None],
         'lengthscale_sigma': [0.2],
         'lengthscale_mean': [2.0],
@@ -58,7 +58,7 @@ hyperparameter_spaces = {
 plot = True # Whether to plot the results in the last step
 steps = 10 # Number of steps to run the active learning algorithm for
 epochs = 100 # Number of epochs to train the model for
-number_of_combinations = 1 # Number of random combinations to generate for each model (random search), set to really high value for grid search
+number_of_combinations = 50 # Number of random combinations to generate for each model (random search), set to really high value for grid search
 
 def generate_random_combinations(parameter_space, num_combinations):
     # Generate all possible combinations

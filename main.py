@@ -1,5 +1,4 @@
 import os
-#os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
 import linear_operator
 import pandas as pd
 import openpyxl
