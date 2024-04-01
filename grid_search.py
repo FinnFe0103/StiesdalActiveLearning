@@ -18,25 +18,25 @@ hyperparameter_spaces = {
     #     'acquisition_function': ['US', 'UCB', 'RS'], # PI, EI
     #     'reg_lambda': [0.05, 0.01, 0.001],
     #     },
-    # 'GP': {
-    #     'scaling': ['Minmax', 'Standard'],
-    #     'learning_rate': [0.01, 0.1],
-    #     'kernel': ['Matern', 'RBF'], #'Linear', 'Cosine', 'Periodic', 'RBF+Linear', 'RBF+Cosine'],
-    #     'lengthscale_prior': [None],
-    #     'lengthscale_sigma': [0.2],
-    #     'lengthscale_mean': [2.0],
-    #     'noise_prior': [None],
-    #     'noise_sigma': [0.1],
-    #     'noise_mean': [1.1],
-    #     'noise_constraint': [1e-3],
-    #     'lengthscale_type': ['Single'],
-    #     'acquisition_function': ['US', 'UCB', 'RS'], # PI, EI
-    #     'reg_lambda': [0.05, 0.01, 0.001],
-    # },
-    'SVR': {
+    'GP': {
         'scaling': ['Minmax', 'Standard'],
-        'acquisition_function': ['EX', 'RS'],
+        'learning_rate': [0.01, 0.1],
+        'kernel': ['Matern', 'RBF'], #'Linear', 'Cosine', 'Periodic', 'RBF+Linear', 'RBF+Cosine'],
+        'lengthscale_prior': [None],
+        'lengthscale_sigma': [0.2],
+        'lengthscale_mean': [2.0],
+        'noise_prior': [None],
+        'noise_sigma': [0.1],
+        'noise_mean': [1.1],
+        'noise_constraint': [1e-3],
+        'lengthscale_type': ['Single'],
+        'acquisition_function': ['US', 'UCB', 'RS'], # PI, EI
+        'reg_lambda': [0.05, 0.01, 0.001],
     },
+    # 'SVR': {
+    #     'scaling': ['Minmax', 'Standard'],
+    #     'acquisition_function': ['EX', 'RS'],
+    # },
     # 'DE': {
     #     'scaling': ['Minmax', 'Standard'],
     #     'learning_rate': [0.01, 0.1],
@@ -63,7 +63,7 @@ steps = 10 # Number of steps to run the active learning algorithm for
 epochs = 100 # Number of epochs to train the model for
 number_of_combinations = 50 # Number of random combinations to generate for each model (random search), set to really high value for grid search
 
-sensors = [49, 52, 59, 60, 164, 1477, 1493, 1509, 1525, 1541, 1563, 2348]
+sensors = ['49', '52', '59', '60', '164', '1477', '1493', '1509', '1525', '1541', '1563', '2348']
 
 def generate_random_combinations(parameter_space, num_combinations):
     # Generate all possible combinations
@@ -165,8 +165,7 @@ with tqdm(total=total_models, desc="Overall progress of models", position=0) as 
         with pd.ExcelWriter(workbook_path, engine='openpyxl') as writer:
             for sensor_name, data in model_performance_data.items():
                 df = pd.DataFrame(data)
-                worksheet_name = sensor_name[:31]  # Excel worksheet names are limited to 31 characters
-                df.to_excel(writer, sheet_name=worksheet_name, index=False)
+                df.to_excel(writer, sheet_name=str(sensor_name), index=False)
 
         pbar_overall.update(1)
         print(f"{model_name} model performance data saved.")
