@@ -24,7 +24,6 @@ from sklearn.model_selection import GridSearchCV
 from sklearn.neighbors import KernelDensity
 from torch.utils.tensorboard import SummaryWriter
 # Module imports
-from data import Dataprep, load_data
 from Models.BNN import BayesianNetwork
 from Models.ExactGP import ExactGPModel
 from Models.Ensemble import Ensemble
@@ -453,13 +452,6 @@ class RunModel:
         distance_matrix = cdist(X_Pool, X_Pool, 'euclidean') # Distance matrix between data points
         initial_lenght = len(selected_indices)
 
-        need_diversification = self.active_learning in ['US', 'EI', 'PI', 'UCB']
-
-        if need_diversification and selected_indices:
-            current_min_distances = distance_matrix[:, selected_indices].min(axis=1)
-        elif need_diversification:
-            current_min_distances = np.zeros(len(X_Pool))
-
         # Process based on the active learning strategy
         if self.active_learning == 'RS':
             while len(selected_indices) < initial_lenght+topk:
@@ -474,25 +466,27 @@ class RunModel:
                     if len(selected_indices) == initial_lenght+topk:
                         break
         else:
-            # Calculate scores for other strategies only if needed
-            if self.active_learning == 'US':
-                scores = stds + self.reg_lambda * current_min_distances
-            elif self.active_learning == 'EI':
-                z = (means - best_y) / stds
-                scores = (means - best_y) * norm.cdf(z) + stds * norm.pdf(z) + self.reg_lambda * current_min_distances
-            elif self.active_learning == 'PI':
-                z = (means - best_y) / stds
-                scores = norm.cdf(z) + self.reg_lambda * current_min_distances
-            elif self.active_learning == 'UCB':
-                scores = means + 2.0 * stds + self.reg_lambda * current_min_distances
-            else:
-                raise ValueError('Invalid acquisition function')
+            while len(selected_indices) < initial_lenght+topk:
+                if selected_indices:
+                    current_min_distances = distance_matrix[:, selected_indices].min(axis=1)
+                else:
+                    current_min_distances = np.zeros(len(X_Pool))
 
-            indices_sorted_by_score = np.argsort(scores)[::-1]  # Sort indices by scores in descending order
-            for index in indices_sorted_by_score:
-                if index not in selected_indices:  # Ensure the index wasn't already selected
-                    selected_indices.append(index)  # Update the list of selected indices
-                    if len(selected_indices) == initial_lenght+topk:
+                if self.active_learning == 'US':
+                    scores = stds + self.reg_lambda * current_min_distances    
+                elif self.active_learning == 'EI':
+                    z = (means - best_y) / stds
+                    scores = (means - best_y) * norm.cdf(z) + stds * norm.pdf(z) + self.reg_lambda * current_min_distances
+                elif self.active_learning == 'PI':
+                    z = (means - best_y) / stds
+                    scores = norm.cdf(z) + self.reg_lambda * current_min_distances
+                elif self.active_learning == 'UCB':
+                    scores = means + 2.0 * stds + self.reg_lambda * current_min_distances
+
+                indices_sorted_by_score = np.argsort(scores)[::-1]  # Sort indices by scores in descending order
+                for index in indices_sorted_by_score:
+                    if index not in selected_indices:  # Ensure the index wasn't already selected
+                        selected_indices.append(index)  # Update the list of selected indices
                         break
 
         return selected_indices
@@ -524,9 +518,9 @@ class RunModel:
         plt.scatter(X_pool, y_pool, c="green", marker="*", alpha=0.1)  # Plot the data pairs in the pool
         plt.scatter(X_selected, y_selected, c="red", marker="*", alpha=0.1)  # plot the train data on top
         plt.scatter(x_pool_selected, y_pool_selected, c="blue", marker="o", alpha=0.8)  # Highlight selected data points
-        #plt.scatter(x_highest_pred_n, y_highest_pred_n, c="purple", marker="o", alpha=0.8)
-        #plt.scatter(x_highest_actual_n, y_highest_actual_n, c="orange", marker="o", alpha=0.1)
-        #plt.scatter(x_highest_actual_1, y_highest_actual_1, c="red", marker="o", alpha=0.1)
+        plt.scatter(x_highest_pred_n, y_highest_pred_n, c="purple", marker="o", alpha=0.8)
+        plt.scatter(x_highest_actual_n, y_highest_actual_n, c="orange", marker="o", alpha=0.1)
+        plt.scatter(x_highest_actual_1, y_highest_actual_1, c="red", marker="o", alpha=0.1)
         plt.title(self.run_name.replace("_", " ") + f' | Step {step + 1}', fontsize=6)
         plt.xlabel('1 Principal Component' if pca_applied else 'x')
         plt.legend(['Mean prediction', 'Confidence Interval', 'Pool data (unseen)', 'Seen data', 'Selected data', 'Final Prediction', 'Highest Actual'], fontsize=8)
