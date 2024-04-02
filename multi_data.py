@@ -77,7 +77,7 @@ class Dataprep:
 
         self.initial_sample = np.append(self.initial_sample, selected_indices)
 
-        print(self.X_selected.shape, self.Y_selected.shape, self.X_pool.shape, self.Y_pool.shape)
+        #print(self.X_selected.shape, self.Y_selected.shape, self.X_pool.shape, self.Y_pool.shape)
 
 def update_data(selected_indices, pool_x, pool_y, known_x, known_y): # 5. Update the known and pool data
     known_x = np.append(known_x, pool_x[selected_indices], axis=0)

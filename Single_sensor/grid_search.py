@@ -102,6 +102,7 @@ with tqdm(total=total_models, desc="Overall progress of models", position=0) as 
 
                             #### ACTIVE LEARNING ALGORITHM FOR SPECIFIC COMBINATION ####
                             for step in range(model.steps):
+                                tqdm.write(f'Step: {step+1} of {model.steps}')
                                 start_step = time.time()
 
                                 train_model_time = time.time()

@@ -12,6 +12,7 @@ import datetime
 import torch
 import gpytorch
 import argparse
+from tqdm import tqdm
 from scipy.stats import norm
 from scipy.spatial.distance import cdist
 from torch.optim import Adam
@@ -45,7 +46,7 @@ class RunModel:
         current_time = datetime.datetime.now().strftime("%H%M%S") # Unique directory based on datetime for each run
         self.log_dir = os.path.join(directory, model_name, current_time + '_' + run_name) # fix run_name
         self.writer = SummaryWriter(self.log_dir) # TensorBoard
-        print('Run saved under:', self.log_dir)
+        #print('Run saved under:', self.log_dir)
 
         # Active learning parameters
         self.active_learning = acquisition_function # Which acquisition function to use
@@ -328,19 +329,19 @@ class RunModel:
         highest_actual_in_top = False
         if any(np.array_equal(row, x_highest_actual_1) for row in x_highest_pred_n):
             highest_actual_in_top = True
-            print("FOUND: The highest actual value is in the top predictions")
+            tqdm.write("FOUND: The highest actual value is in the top predictions")
         else:
-            print("NOT FOUND: The highest actual value is not in the top predictions")
+            tqdm.write("NOT FOUND: The highest actual value is not in the top predictions")
         
-        print(f'Percentage of common indices in top {topk} predictions: {percentage_common:.2f}%')
-        print(f'Number of predictions from pool: {len(x_highest_pred_n)-preds_from_known} | Number of predictions from known data: {preds_from_known}')
+        #print(f'Percentage of common indices in top {topk} predictions: {percentage_common:.2f}%')
+        #print(f'Number of predictions from pool: {len(x_highest_pred_n)-preds_from_known} | Number of predictions from known data: {preds_from_known}')
 
         highest_actual_in_known = False
         if any(np.array_equal(row, x_highest_actual_1) for row in X_selected):
             highest_actual_in_known = True
-            print("KNOWN: The highest actual value is in the known data")
+            tqdm.write("KNOWN: The highest actual value is in the known data")
         else:
-            print("NOT KNOWN: The highest actual value is not in the known data")
+            tqdm.write("NOT KNOWN: The highest actual value is not in the known data")
         
         self.set_predicted_pdf(means)
         
@@ -391,7 +392,7 @@ class RunModel:
         # Log the loss to TensorBoard
         self.writer.add_scalar('loss/pool_mse', mse.item(), step + 1)
         self.writer.add_scalar('loss/pool_mae', mae.item(), step + 1)
-        print(f'Step: {step + 1} | Pool-Loss: {mse.item()}')
+        #print(f'Step: {step + 1} | Pool-Loss: {mse.item()}')
 
     def predict(self, X_pool): # 4. Predict the mean and std (uncertainty) on the pool data
         X_pool_torch = torch.tensor(X_pool).to(self.device)
@@ -506,8 +507,8 @@ class RunModel:
             
         x_pool_selected = X_pool[selected_indices] # [observations, 1]
         y_pool_selected = y_pool[selected_indices] # [observations]
-        print(x_pool_selected.shape, y_pool_selected.shape)
-        print(selected_indices)
+        #print(x_pool_selected.shape, y_pool_selected.shape)
+        #print(selected_indices)
 
         y_vals = [means, means + 2 * stds, means - 2 * stds] #list of 3 arrays of shape [observations in pool, 1] (use 2 for 95% CI)
         df = pd.concat([pd.DataFrame({'x': X_pool.squeeze(), 'y': y_val.squeeze()}) for y_val in y_vals], ignore_index=True)
