@@ -298,32 +298,30 @@ class RunModel:
             mse = self.mse(torch.tensor(means).to(self.device), y_total_torch.squeeze())
             mae = self.mae(torch.tensor(means).to(self.device), y_total_torch.squeeze())
 
-        highest_indices_pred = np.argsort(means)    
+        highest_indices_pred = np.argsort(means)[::-1]
+        highest_indices_pred_n = highest_indices_pred[:topk]
+
+        highest_indices_actual = np.argsort(y_total)[::-1]
+        highest_indices_actual_n = highest_indices_actual[:topk]
         highest_indices_actual_1 = np.argsort(y_total)[-1]
 
-        print("Highest indices pred:", highest_indices_pred)
-        print("Highest indices actual 1:", highest_indices_actual_1)
-
         index_of_actual_1_in_pred = np.where(highest_indices_pred == highest_indices_actual_1)[0][0]
-        print(index_of_actual_1_in_pred)
 
-
-        top_n_pred_indices = highest_indices_pred_n[:index_of_actual_1_in_pred]
+        top_n_pred_indices = highest_indices_pred[:index_of_actual_1_in_pred+1]
+        # tqdm.write(str(index_of_actual_1_in_pred))
+        # tqdm.write(str(len(top_n_pred_indices)))
+        # tqdm.write(str(highest_indices_actual_1))
+        # tqdm.write(str(top_n_pred_indices))
+        # pd.DataFrame({'highest_indices_pred': top_n_pred_indices}).to_csv('top_n_pred_indices.csv')
+        # pd.DataFrame(X_selected).to_csv('X_selected.csv')
+        # pd.DataFrame(X_total[top_n_pred_indices]).to_csv('X_total.csv')
 
         seen_count = 0
         for idx in top_n_pred_indices:
             if any(np.array_equal(X_total[idx], x) for x in X_selected):
-                print(X_total[idx])
-                print(X_selected)
                 seen_count += 1
 
-        print(seen_count)
-
         # For plotting
-        highest_indices_pred_n = np.argsort(means)[-topk:]
-        highest_indices_pred_1 = np.argsort(means)[-1]
-        highest_indices_actual_n = np.argsort(y_total)[-topk:]
-
         x_highest_pred_n = X_total[highest_indices_pred_n]
         y_highest_pred_n = y_total[highest_indices_pred_n]
 
@@ -339,10 +337,17 @@ class RunModel:
         # Log the loss to TensorBoard
         self.writer.add_scalar('loss/total_mse', mse.item(), step + 1)
         self.writer.add_scalar('loss/total_mae', mae.item(), step + 1)
-        
+
+        highest_actual_in_top = False
+        if any(np.array_equal(row, x_highest_actual_1) for row in x_highest_pred_n):
+            highest_actual_in_top = True
+            tqdm.write("FOUND: The highest actual value is in the top predictions")
+        else:
+            tqdm.write("NOT FOUND: The highest actual value is not in the top predictions")
+    
         self.set_predicted_pdf(means)
         
-        return x_highest_pred_n, y_highest_pred_n, x_highest_actual_n, y_highest_actual_n, x_highest_actual_1, y_highest_actual_1, mse.item(), mae.item(), percentage_common, index_of_actual_1_in_pred, seen_count
+        return x_highest_pred_n, y_highest_pred_n, x_highest_actual_n, y_highest_actual_n, x_highest_actual_1, y_highest_actual_1, mse.item(), mae.item(), percentage_common, index_of_actual_1_in_pred, seen_count, highest_actual_in_top, highest_indices_pred, highest_indices_actual_1
 
     def evaluate_pool_data(self, step, X_pool, y_pool): # 3. Evaluate the model on the pool data
         # Convert pool data to PyTorch tensors and move them to the correct device

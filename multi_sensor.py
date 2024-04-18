@@ -69,7 +69,7 @@ with tqdm(total=total_models, desc="Overall progress of models", position=0) as 
 
                             # Get the final predictions as if this was the last step
                             final_prediction_time = time.time()
-                            x_highest_pred_n, y_highest_pred_n, x_highest_actual_n, y_highest_actual_n, x_highest_actual_1, y_highest_actual_1, mse, mae, percentage_common, highest_actual_in_top, highest_actual_in_known = model.final_prediction(step=step, X_total=data.X, y_total=data.Y[:, index], X_selected=data.X_selected, topk=topk)
+                            x_highest_pred_n, y_highest_pred_n, x_highest_actual_n, y_highest_actual_n, x_highest_actual_1, y_highest_actual_1, mse, mae, percentage_common, index_of_actual_1_in_pred, seen_count, highest_actual_in_top, highest_indices_pred, highest_indices_actual_1 = model.final_prediction(step=step, X_total=data.X, y_total=data.Y[:, index], X_selected=data.X_selected, topk=topk)
                             #print(model_name)
                             #print('MSE:', mse, 'MAE:', mae, 'Percentage common:', percentage_common, 'Highest actual in top:', highest_actual_in_top, 'Highest actual in known:', highest_actual_in_known)
                             tqdm.write(f'---Final prediction time: {time.time() - final_prediction_time:.2f} seconds')
@@ -97,11 +97,14 @@ with tqdm(total=total_models, desc="Overall progress of models", position=0) as 
                                             'MSE': mse,
                                             'MAE': mae,
                                             'Percentage_common': percentage_common,
-                                            'Highest_actual_in_top': highest_actual_in_top,
-                                            'Highest_actual_in_known': highest_actual_in_known
+                                            'Index of highest simulation': index_of_actual_1_in_pred,
+                                            'Simulations seen before': seen_count,
+                                            'Highest simulation in pred': highest_actual_in_top,
+                                            'highest_indices_pred': highest_indices_pred,
+                                            'highest_indices_actual_1': highest_indices_actual_1,
                             })
 
-                            if plot and step+1 == model.steps:
+                            if plot and (step + 1) % 5 == 0:
                                 plot_time = time.time()
                                 model.plot(means=means, stds=stds, selected_indices=selected_indices[-topk:], step=step, x_highest_pred_n=x_highest_pred_n, y_highest_pred_n=y_highest_pred_n, x_highest_actual_n=x_highest_actual_n, y_highest_actual_n=y_highest_actual_n, x_highest_actual_1=x_highest_actual_1, y_highest_actual_1=y_highest_actual_1, X_pool=data.X_pool, y_pool=data.Y_pool[:, index], X_selected=data.X_selected, y_selected=data.Y_selected[:, index])
                                 tqdm.write(f'---Plotting time: {time.time() - plot_time:.2f} seconds')
