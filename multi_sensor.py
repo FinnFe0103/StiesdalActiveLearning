@@ -8,8 +8,10 @@ import openpyxl
 from multi_main import RunModel
 from multi_data import Dataprep, update_data
 
-hyperparameter_spaces = {'SVR': {'acquisition_function': ['RS']}, } #1
-                         #'GP': {'learning_rate': [0.01, 0.1], 'kernel': ['Matern', 'RBF'], 'lengthscale_prior': [None], 'lengthscale_sigma': [0.2], 'lengthscale_mean': [2.0], 'noise_prior': [None], 'noise_sigma': [0.1], 'noise_mean': [1.1], 'noise_constraint': [1e-3], 'lengthscale_type': ['Single'], 'acquisition_function': ['US', 'UCB', 'RS'], 'reg_lambda': [0.001, 0.01, 0.05]}, }#36
+hyperparameter_spaces = {
+                         #'SVR': {'acquisition_function': ['RS']}, } #1
+                         'GP': {'learning_rate': [0.01, 0.05, 0.1], 'kernel': ['Matern', 'RBF', 'Linear', 'Periodic'], 'lengthscale_prior': [None], 'lengthscale_sigma': [0.01, 0.05, 0.1, 0.5, 1], 'lengthscale_mean': [1.0], 'noise_prior': [None], 'noise_sigma': [0.01, 0.05, 0.1, 0.2, 0.5], 'noise_mean': [1.0], 'noise_constraint': [1e-1, 1e-3, 1e-6], 'lengthscale_type': ['Single', 'ARD'], 'acquisition_function': ['US', 'UCB', 'RS'], 'reg_lambda': [0.001, 0.01, 0.05]}, }#36 # RBF*Matern promising
+#only if time:           #'GP': {'learning_rate': [0.01, 0.05, 0.1], 'kernel': ['RBF+Linear', 'RBF+Periodic', 'RBF*Periodic', 'RBF*Linear', 'RBF+Matern','RBF*Matern','Matern+Linear','Matern*Linear', 'Matern*Periodic', 'Periodic*Linear', 'Periodic+Linear'], 'lengthscale_prior': [None], 'lengthscale_sigma': [0.01, 0.05, 0.1, 0.5, 1], 'lengthscale_mean': [1.0], 'noise_prior': [None], 'noise_sigma': [0.01, 0.05, 0.1, 0.2, 0.5], 'noise_mean': [1.0], 'noise_constraint': [1e-1, 1e-3, 1e-6], 'lengthscale_type': ['Single', 'ARD'], 'acquisition_function': ['US', 'UCB', 'RS'], 'reg_lambda': [0.001, 0.01, 0.05]}, }#36 # RBF*Matern promising
                          #'BNN': {'learning_rate': [0.01], 'hidden_size': [4], 'layer_number': [3], 'prior_sigma': [0.00000001], 'complexity_weight': [0.001], 'acquisition_function': ['US', 'UCB', 'RS'], 'reg_lambda': [0.001, 0.01, 0.05]},} #9
                          #'DE': {'learning_rate': [0.01], 'hidden_size': [4], 'layer_number': [3], 'ensemble_size': [2], 'acquisition_function': ['US', 'UCB', 'RS'], 'reg_lambda': [0.001, 0.01, 0.05]},} #9
                          #'MCD': {'learning_rate': [0.01, 0.1], 'hidden_size': [20], 'layer_number': [5], 'dropout_rate': [0.5], 'acquisition_function': ['US', 'UCB', 'RS'], 'reg_lambda': [0.001, 0.01, 0.05]}} #18
