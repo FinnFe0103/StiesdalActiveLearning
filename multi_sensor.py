@@ -20,7 +20,7 @@ directory = 'runs' + '_' + datetime.datetime.now().strftime("%m-%d %H:%M") # Dir
 plot = True # Whether to plot the results in the last step
 steps = 20 # Number of steps to run the active learning algorithm for
 epochs = 100 # Number of epochs to train the model for
-num_combinations = 50 # Number of random combinations to generate for each model (random search), set to really high value for grid search
+num_combinations = 500 # Number of random combinations to generate for each model (random search), set to really high value for grid search
 
 sensors = ['49', '52', '59', '60', '164', '1477', '1493', '1509', '1525', '1541', '1563', '2348']
 
