@@ -2,23 +2,29 @@ import itertools
 import random
 import time
 import datetime
-from tqdm import tqdm
-import pandas as pd
 import openpyxl
+import pandas as pd
+import numpy as np
 from joblib import Parallel, delayed
 from multi_main import RunModel
 from multi_data import Dataprep, update_data
+from tqdm import tqdm
 
+# set seeds for reproducibility
+random.seed(42)
+np.random.seed(42)
+
+#324 x kernel
 hyperparameter_spaces = {
-                         #'SVR': {'acquisition_function': ['RS']},  }# 'kernel': ['rbf', 'sigmoid', 'poly'], 'C': [1, 5, 10], 'epsilon': [0.01, 0.05, 0.1]},  }
-                         'GP': {'learning_rate': [0.01, 0.05, 0.1], 'kernel': ['Matern', 'RBF', 'Linear', 'Periodic'], 'lengthscale_prior': [None], 'lengthscale_sigma': [0.01, 0.05, 0.1, 0.5, 1], 'lengthscale_mean': [1.0], 'noise_prior': [None], 'noise_sigma': [0.01, 0.05, 0.1, 0.2, 0.5], 'noise_mean': [1.0], 'noise_constraint': [1e-1, 1e-3, 1e-6], 'lengthscale_type': ['Single', 'ARD'], 'acquisition_function': ['US', 'UCB', 'RS'], 'reg_lambda': [0.001, 0.01, 0.05]}, }#36 # RBF*Matern promising
+                         #'SVR': {'acquisition_function': ['RS'], 'kernel': ['rbf', 'sigmoid', 'poly'], 'C': [1, 5, 10], 'epsilon': [0.01, 0.05, 0.1]},  }
+                         'GP': {'learning_rate': [0.01, 0.1], 'kernel': ['Matern', 'RBF', 'Linear', 'Periodic'], 'lengthscale_prior': [None], 'lengthscale_sigma': [0.01, 0.1, 1], 'lengthscale_mean': [1.0], 'noise_prior': [None], 'noise_sigma': [0.01, 0.1, 0.5], 'noise_mean': [1.0], 'noise_constraint': [1e-6], 'lengthscale_type': ['Single', 'ARD'], 'acquisition_function': ['US', 'UCB', 'RS'], 'reg_lambda': [0.001, 0.01, 0.05]}, }#36 # RBF*Matern promising
 #only if time:           #'GP': {'learning_rate': [0.01, 0.05, 0.1], 'kernel': ['RBF+Linear', 'RBF+Periodic', 'RBF*Periodic', 'RBF*Linear', 'RBF+Matern','RBF*Matern','Matern+Linear','Matern*Linear', 'Matern*Periodic', 'Periodic*Linear', 'Periodic+Linear'], 'lengthscale_prior': [None], 'lengthscale_sigma': [0.01, 0.05, 0.1, 0.5, 1], 'lengthscale_mean': [1.0], 'noise_prior': [None], 'noise_sigma': [0.01, 0.05, 0.1, 0.2, 0.5], 'noise_mean': [1.0], 'noise_constraint': [1e-1, 1e-3, 1e-6], 'lengthscale_type': ['Single', 'ARD'], 'acquisition_function': ['US', 'UCB', 'RS'], 'reg_lambda': [0.001, 0.01, 0.05]}, }#36 # RBF*Matern promising
 
 directory = 'runs' + '_' + datetime.datetime.now().strftime("%m-%d %H:%M") # Directory to save the results
 plot = False # Whether to plot the results in the last step
-steps = 2 # Number of steps to run the active learning algorithm for
+steps = 20 # Number of steps to run the active learning algorithm for
 epochs = 100 # Number of epochs to train the model for
-num_combinations = 2 # Number of random combinations to generate for each model (random search), set to really high value for grid search
+num_combinations = 64  # Number of random combinations to generate for each model (random search), set to really high value for grid search
 
 sensors = ['49', '52', '59', '60', '164', '1477', '1493', '1509', '1525', '1541', '1563', '2348']
 all_combinations = []
@@ -27,7 +33,6 @@ for model_name, params_space in hyperparameter_spaces.items():
     model_combinations = [dict(zip(params_space, v)) for v in itertools.product(*params_space.values())]
     if len(model_combinations) > num_combinations:
         model_combinations = random.sample(model_combinations, num_combinations)
-    print(len(model_combinations))
     all_combinations.extend((model_name, combo) for combo in model_combinations)
 
 
@@ -115,14 +120,13 @@ def process_combination(model_name, combination, sensors, steps, epochs, directo
             pbar_steps.update(1)
         return xyz
 
-
+# Calculate the start time
+start = time.time()
 
 steps_dataframes = {} 
 
 # Parallelize processing of each combination
 results = Parallel(n_jobs=-1)(delayed(process_combination)(model_name, combo, sensors, steps, epochs, directory, plot) for model_name, combo in all_combinations)
-
-print(results)
 
 excel_filename = f'{directory}/{model_name}_model_results.xlsx'
 # Aggregating results into steps_dataframes
@@ -141,3 +145,10 @@ with pd.ExcelWriter(excel_filename, engine='openpyxl') as writer:
         df = pd.DataFrame(data_list)
         sheet_name = f'Step_{step}'
         df.to_excel(writer, sheet_name=sheet_name, index=False)
+
+# Calculate the end time and time taken
+end = time.time()
+length = end - start
+
+# Show the results : this can be altered however you like
+print("It took", length, "seconds to run", total_models, "models for", steps, "steps")
