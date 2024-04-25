@@ -16,15 +16,15 @@ np.random.seed(42)
 
 #324 x kernel
 hyperparameter_spaces = {
-                         #'SVR': {'acquisition_function': ['RS'], 'kernel': ['rbf', 'sigmoid', 'poly'], 'C': [1, 5, 10], 'epsilon': [0.01, 0.05, 0.1]},  }
-                         'GP': {'learning_rate': [0.01, 0.1], 'kernel': ['Matern', 'RBF', 'Linear', 'Periodic'], 'lengthscale_prior': [None], 'lengthscale_sigma': [0.01, 0.1, 1], 'lengthscale_mean': [1.0], 'noise_prior': [None], 'noise_sigma': [0.01, 0.1, 0.5], 'noise_mean': [1.0], 'noise_constraint': [1e-6], 'lengthscale_type': ['Single', 'ARD'], 'acquisition_function': ['US', 'UCB', 'RS'], 'reg_lambda': [0.001, 0.01, 0.05]}, }#36 # RBF*Matern promising
+                         'SVR': {'acquisition_function': ['RS'], 'kernel': ['rbf', 'sigmoid', 'poly'], 'C': [1, 5, 10], 'epsilon': [0.01, 0.05, 0.1]}, }
+                         #'GP': {'learning_rate': [0.01, 0.1], 'kernel': ['Matern', 'Periodic'], 'lengthscale_prior': [None], 'lengthscale_sigma': [0.01, 0.1, 1], 'lengthscale_mean': [1.0], 'noise_prior': [None], 'noise_sigma': [0.01, 0.1, 0.5], 'noise_mean': [1.0], 'noise_constraint': [1e-6], 'lengthscale_type': ['Single', 'ARD'], 'acquisition_function': ['US', 'UCB', 'RS'], 'reg_lambda': [0.001, 0.01, 0.05]}, }#36 # RBF*Matern promising
 #only if time:           #'GP': {'learning_rate': [0.01, 0.05, 0.1], 'kernel': ['RBF+Linear', 'RBF+Periodic', 'RBF*Periodic', 'RBF*Linear', 'RBF+Matern','RBF*Matern','Matern+Linear','Matern*Linear', 'Matern*Periodic', 'Periodic*Linear', 'Periodic+Linear'], 'lengthscale_prior': [None], 'lengthscale_sigma': [0.01, 0.05, 0.1, 0.5, 1], 'lengthscale_mean': [1.0], 'noise_prior': [None], 'noise_sigma': [0.01, 0.05, 0.1, 0.2, 0.5], 'noise_mean': [1.0], 'noise_constraint': [1e-1, 1e-3, 1e-6], 'lengthscale_type': ['Single', 'ARD'], 'acquisition_function': ['US', 'UCB', 'RS'], 'reg_lambda': [0.001, 0.01, 0.05]}, }#36 # RBF*Matern promising
 
 directory = 'runs' + '_' + datetime.datetime.now().strftime("%m-%d %H:%M") # Directory to save the results
 plot = False # Whether to plot the results in the last step
 steps = 20 # Number of steps to run the active learning algorithm for
 epochs = 100 # Number of epochs to train the model for
-num_combinations = 64  # Number of random combinations to generate for each model (random search), set to really high value for grid search
+num_combinations = 4  # Number of random combinations to generate for each model (random search), set to really high value for grid search
 
 sensors = ['49', '52', '59', '60', '164', '1477', '1493', '1509', '1525', '1541', '1563', '2348']
 all_combinations = []
@@ -34,6 +34,9 @@ for model_name, params_space in hyperparameter_spaces.items():
     if len(model_combinations) > num_combinations:
         model_combinations = random.sample(model_combinations, num_combinations)
     all_combinations.extend((model_name, combo) for combo in model_combinations)
+
+print(f"Total models: {total_models}")
+print(all_combinations)
 
 
 def process_combination(model_name, combination, sensors, steps, epochs, directory, plot):            
@@ -51,71 +54,91 @@ def process_combination(model_name, combination, sensors, steps, epochs, directo
     xyz = []
     selected_indices = []
     with tqdm(total=steps, desc="Steps (all sensors)", leave=False, position=2) as pbar_steps:
+        
         for step in range(steps):
-            #print('Step:', step)
-            #print(selected_indices)
-            #print(len(set(selected_indices)))
+            try:
+                #print('Step:', step)
+                #print(selected_indices)
+                #print(len(set(selected_indices)))
 
-            data.update_data(selected_indices) # Update the known and pool data
+                data.update_data(selected_indices) # Update the known and pool data
 
-            step_data = []
-            selected_indices = []
-            for index, model in enumerate(model_instances):
-                #print(model.run_name)
-                topk = int(36/len(model_instances)) # Number of samples to select from the pool data per sensor/model
+                step_data = []
+                selected_indices = []
+                for index, model in enumerate(model_instances):
+                    #print(model.run_name)
+                    topk = int(36/len(model_instances)) # Number of samples to select from the pool data per sensor/model
 
-                tqdm.write(f'------------ Step {step+1} for sensor {model.run_name.split("_")[0]} ------------')
+                    tqdm.write(f'------------ Step {step+1} for sensor {model.run_name.split("_")[0]} ------------')
 
-                # Train the model
-                train_model_time = time.time()
-                model.train_model(step=step, X_selected=data.X_selected, y_selected=data.Y_selected[:, index])
-                tqdm.write(f'---Training time: {time.time() - train_model_time:.2f} seconds')
+                    # Train the model
+                    train_model_time = time.time()
+                    model.train_model(step=step, X_selected=data.X_selected, y_selected=data.Y_selected[:, index])
+                    tqdm.write(f'---Training time: {time.time() - train_model_time:.2f} seconds')
 
-                # Get the final predictions as if this was the last step
-                final_prediction_time = time.time()
-                x_highest_pred_n, y_highest_pred_n, x_highest_actual_n, y_highest_actual_n, x_highest_actual_1, y_highest_actual_1, mse, mae, percentage_common, index_of_actual_1_in_pred, seen_count, highest_actual_in_top, highest_indices_pred, highest_indices_actual_1 = model.final_prediction(step=step, X_total=data.X, y_total=data.Y[:, index], X_selected=data.X_selected, topk=topk)
-                #print(model_name)
-                #print('MSE:', mse, 'MAE:', mae, 'Percentage common:', percentage_common, 'Highest actual in top:', highest_actual_in_top, 'Highest actual in known:', highest_actual_in_known)
-                tqdm.write(f'---Final prediction time: {time.time() - final_prediction_time:.2f} seconds')
+                    # Get the final predictions as if this was the last step
+                    final_prediction_time = time.time()
+                    x_highest_pred_n, y_highest_pred_n, x_highest_actual_n, y_highest_actual_n, x_highest_actual_1, y_highest_actual_1, mse, mae, percentage_common, index_of_actual_1_in_pred, seen_count, highest_actual_in_top, highest_indices_pred, highest_indices_actual_1 = model.final_prediction(step=step, X_total=data.X, y_total=data.Y[:, index], X_selected=data.X_selected, topk=topk)
+                    #print(model_name)
+                    #print('MSE:', mse, 'MAE:', mae, 'Percentage common:', percentage_common, 'Highest actual in top:', highest_actual_in_top, 'Highest actual in known:', highest_actual_in_known)
+                    tqdm.write(f'---Final prediction time: {time.time() - final_prediction_time:.2f} seconds')
 
-                # Evaluate the model on the pool data
-                evaluate_pool_data_time = time.time()
-                model.evaluate_pool_data(step=step, X_pool=data.X_pool, y_pool=data.Y_pool[:, index]) 
-                tqdm.write(f'---Evaluation on pool data time: {time.time() - evaluate_pool_data_time:.2f} seconds')
+                    # Evaluate the model on the pool data
+                    evaluate_pool_data_time = time.time()
+                    model.evaluate_pool_data(step=step, X_pool=data.X_pool, y_pool=data.Y_pool[:, index]) 
+                    tqdm.write(f'---Evaluation on pool data time: {time.time() - evaluate_pool_data_time:.2f} seconds')
 
-                # Predict the uncertainty on the pool data
-                predict_time = time.time()
-                means, stds = model.predict(X_pool=data.X_pool)
-                tqdm.write(f'---Prediction time: {time.time() - predict_time:.2f} seconds')
+                    # Predict the uncertainty on the pool data
+                    predict_time = time.time()
+                    means, stds = model.predict(X_pool=data.X_pool)
+                    tqdm.write(f'---Prediction time: {time.time() - predict_time:.2f} seconds')
 
-                # Select the next samples from the pool
-                acquisition_function_time = time.time()
-                selected_indices = model.acquisition_function(means, stds, y_selected=data.Y_selected[:, index], X_Pool=data.X_pool, topk=topk, selected_indices=selected_indices)
-                tqdm.write(f'---Acquisition function time: {time.time() - acquisition_function_time:.2f} seconds')
-                #print('length of selected indices:', selected_indices)
-                #print('training data (y):', data.Y_selected.shape, data.Y_selected[:5, index])
+                    # Select the next samples from the pool
+                    acquisition_function_time = time.time()
+                    selected_indices = model.acquisition_function(means, stds, y_selected=data.Y_selected[:, index], X_Pool=data.X_pool, topk=topk, selected_indices=selected_indices)
+                    tqdm.write(f'---Acquisition function time: {time.time() - acquisition_function_time:.2f} seconds')
+                    #print('length of selected indices:', selected_indices)
+                    #print('training data (y):', data.Y_selected.shape, data.Y_selected[:5, index])
 
+                    step_data.append({
+                                    'Step': step+1,
+                                    'Model': model.run_name.split('_')[1],
+                                    'Sensor': model.run_name.split('_')[0],
+                                    'Combination': model.run_name.split('_', 2)[2],
+                                    'MSE': mse,
+                                    'MAE': mae,
+                                    'Percentage_common': percentage_common,
+                                    'Index of highest simulation': index_of_actual_1_in_pred,
+                                    'Simulations seen before': seen_count,
+                                    'Highest simulation in pred': highest_actual_in_top,
+                                    'highest_indices_pred': highest_indices_pred,
+                                    'highest_indices_actual_1': highest_indices_actual_1,
+                    })
+
+                    if plot and (step + 1) % 5 == 0:
+                        plot_time = time.time()
+                        model.plot(means=means, stds=stds, selected_indices=selected_indices[-topk:], step=step, x_highest_pred_n=x_highest_pred_n, y_highest_pred_n=y_highest_pred_n, x_highest_actual_n=x_highest_actual_n, y_highest_actual_n=y_highest_actual_n, x_highest_actual_1=x_highest_actual_1, y_highest_actual_1=y_highest_actual_1, X_pool=data.X_pool, y_pool=data.Y_pool[:, index], X_selected=data.X_selected, y_selected=data.Y_selected[:, index])
+                        tqdm.write(f'---Plotting time: {time.time() - plot_time:.2f} seconds')
+                    
+                    tqdm.write(f'------------ Step {step+1} completed ------------')
+
+            except Exception as e:
+                print(f'Error in step {step+1} for sensor {model.run_name.split("_")[0]}: {e}')
                 step_data.append({
-                                'Step': step+1,
-                                'Model': model.run_name.split('_')[1],
-                                'Sensor': model.run_name.split('_')[0],
-                                'Combination': model.run_name.split('_', 2)[2],
-                                'MSE': mse,
-                                'MAE': mae,
-                                'Percentage_common': percentage_common,
-                                'Index of highest simulation': index_of_actual_1_in_pred,
-                                'Simulations seen before': seen_count,
-                                'Highest simulation in pred': highest_actual_in_top,
-                                'highest_indices_pred': highest_indices_pred,
-                                'highest_indices_actual_1': highest_indices_actual_1,
-                })
-
-                if plot and (step + 1) % 5 == 0:
-                    plot_time = time.time()
-                    model.plot(means=means, stds=stds, selected_indices=selected_indices[-topk:], step=step, x_highest_pred_n=x_highest_pred_n, y_highest_pred_n=y_highest_pred_n, x_highest_actual_n=x_highest_actual_n, y_highest_actual_n=y_highest_actual_n, x_highest_actual_1=x_highest_actual_1, y_highest_actual_1=y_highest_actual_1, X_pool=data.X_pool, y_pool=data.Y_pool[:, index], X_selected=data.X_selected, y_selected=data.Y_selected[:, index])
-                    tqdm.write(f'---Plotting time: {time.time() - plot_time:.2f} seconds')
-                
-                tqdm.write(f'------------ Step {step+1} completed ------------')
+                                    'Step': step+1,
+                                    'Model': model.run_name.split('_')[1],
+                                    'Sensor': model.run_name.split('_')[0],
+                                    'Combination': model.run_name.split('_', 2)[2],
+                                    'MSE': None,
+                                    'MAE': None,
+                                    'Percentage_common': None,
+                                    'Index of highest simulation': None,
+                                    'Simulations seen before': None,
+                                    'Highest simulation in pred': None,
+                                    'highest_indices_pred': None,
+                                    'highest_indices_actual_1': None,
+                    })
+                continue
             xyz.append(step_data)
             pbar_steps.update(1)
         return xyz
