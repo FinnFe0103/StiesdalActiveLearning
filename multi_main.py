@@ -38,6 +38,7 @@ class RunModel:
                  ensemble_size=None, 
                  dropout_rate=None,
                  kernel=None, lengthscale_prior=None, lengthscale_sigma=None, lengthscale_mean=None, noise_prior=None, noise_sigma=None, noise_mean=None, noise_constraint=None, lengthscale_type=None,
+                 C=None, epsilon=None,
                  acquisition_function=None, reg_lambda=None, steps=None, epochs=None,
                  verbose=False):
 
@@ -65,6 +66,12 @@ class RunModel:
         self.complexity_weight = complexity_weight
         self.ensemble_size = ensemble_size
         self.dropout_rate = dropout_rate
+
+        # SVR Parameters
+        self.svr_kernel = kernel
+        self.svr_C = C
+        self.svr_epsilon = epsilon
+        
         self.init_model(x_total.shape[1]) # Initialize the model
         self.device = torch.device('mps' if torch.backends.mps.is_available() and self.model_name != 'GP' else 'cpu') #and self.model_name != 'DE' 
         
@@ -78,6 +85,8 @@ class RunModel:
         self.noise_mean = noise_mean
         self.noise_constraint = noise_constraint
         self.lengthscale_type = lengthscale_type
+
+        
 
         # KL Divergence
         self.set_actual_pdf(y_total) # Set the actual PDF of the data
@@ -98,7 +107,7 @@ class RunModel:
             self.likelihood = None # Initialize the likelihood
             self.mll = None # Initialize the marginal log likelihood
         elif self.model_name == 'SVR':
-            self.model = SVR(kernel='rbf', C=5, epsilon=0.05)
+            self.model = SVR(kernel=self.svr_kernel, C=self.svr_C, epsilon=self.svr_epsilon)
             self.init_optimizer_criterion() # Initialize the optimizer
         elif self.model_name == 'DE':
             self.model = [Ensemble(input_dim, self.hidden_size, self.layer_number) for _ in range(self.ensemble_size)]
