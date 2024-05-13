@@ -10,3 +10,5 @@ The preprocessing.py file performs the preprocessing of the database and derives
 
 GP_postprocessed.xlsx and SVR_postprocessed.xlsx are the outputs of the grid search performed using the multi_sensor_parallel.py file.
 The files post-processing.ipynb and postpost.ipynb were used to analyze the results as well as to create the result charts in the result section of the thesis.
+
+The validation.xlsx file contains the calculations performed for the savings if the LCSA was implemented on the 4 caselists considered in this thesis.
