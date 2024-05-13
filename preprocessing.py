@@ -32,6 +32,16 @@ def encode(data, col, max_val):
     data[col + '_cos'] = np.cos(2 * np.pi * data[col]/max_val)
     return data
 
+def get_absolute(data, col):
+    data_abs = data.copy()
+    data_abs[col] = data_abs[col].abs()
+    return data_abs
+
+def get_reverse(data, col):
+    data_rev = data.copy()
+    data_rev[col] = -data_rev[col]
+    return data_rev
+
 def create_csvs(db):
     con = sqlite3.connect(db)
     df_sensors = pd.read_sql_query('SELECT * FROM sensors', con)
@@ -79,17 +89,20 @@ def create_csvs(db):
     # drop the original columns
     caselist_unique = caselist_unique.drop(columns=['CurrentGeographic', 'WaveGeographic', 'WindGeographic', 'YawError'])
 
+    mean_results = get_absolute(mean_results, 49) #49: foundation_origin xy FloaterOffset [m]
+    mean_results = get_absolute(mean_results, 52) #52: foundation_origin Rxy FloaterTilt [deg]
+
     # rename the columns of sim_results
-    column_mapping = pd.Series(sensors.name.values,index=sensors.id).to_dict()
-    mean_results_renamed = mean_results.rename(columns=column_mapping)
+    # column_mapping = pd.Series(sensors.name.values,index=sensors.id).to_dict()
+    # mean_results = mean_results.rename(columns=column_mapping)
 
     # drop groupID col from both dataframes
     caselist_unique = caselist_unique.drop(columns=['GroupID'])
-    mean_results_renamed = mean_results_renamed.drop(columns=['GroupID'])
+    mean_results = mean_results.drop(columns=['GroupID'])
 
     # save to csv
     caselist_unique.to_csv('_data/caselist.csv', index=False)
-    mean_results_renamed.to_csv('_data/sim_results.csv', index=False)
+    mean_results.to_csv('_data/sim_results.csv', index=False)
     print('Saved caselist and sim_results to csv!')
 
 if __name__ == '__main__':
