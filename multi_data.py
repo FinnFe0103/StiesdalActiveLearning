@@ -23,8 +23,9 @@ class Dataprep:
         # pd.DataFrame(self.y).to_csv('y.csv', index=False)
     
     def load_caselist(self, sensors): # Load the caselist data from csvs (update later to read directly from the database)
-        X = pd.read_csv('_data/caselist.csv')
-        Y = pd.read_csv('_data/sim_results.csv')
+        X = pd.read_csv('_data/caselist_LILA.csv')
+        Y = pd.read_csv('_data/sim_results_LILA.csv')
+        print(Y.columns)
         Y = np.array(Y[sensors])
         return X.astype(np.float32), Y.astype(np.float32)
     

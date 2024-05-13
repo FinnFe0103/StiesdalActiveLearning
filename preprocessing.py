@@ -89,8 +89,8 @@ def create_csvs(db):
     # drop the original columns
     caselist_unique = caselist_unique.drop(columns=['CurrentGeographic', 'WaveGeographic', 'WindGeographic', 'YawError'])
 
-    mean_results = get_absolute(mean_results, 49) #49: foundation_origin z FloaterHeave [m]
-    mean_results = get_absolute(mean_results, 52) #52 foundation_origin Rz FloaterYaw [deg]
+    mean_results = get_absolute(mean_results, 49) #49: foundation_origin xy FloaterOffset [m]
+    mean_results = get_absolute(mean_results, 52) #52: foundation_origin Rxy FloaterTilt [deg]
 
     # rename the columns of sim_results
     # column_mapping = pd.Series(sensors.name.values,index=sensors.id).to_dict()

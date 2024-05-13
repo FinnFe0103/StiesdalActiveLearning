@@ -1,4 +1,5 @@
 _data/U62_PULSE_simulationstats.db
+simulationstats_DLC12.db
 _archive
 __pycache__
 _plots
@@ -10,3 +11,13 @@ _Noteworthy_Runs
 runs*/
 Number_Rows.ipynb
 Charts
+multi_sensor_parallel_DLC12.py
+multi_sensor_parallel_LILA.py
+preprocessing_DLC_PreLILA.ipynb
+preprocessing_DLC_Vestas.ipynb
+preprocessing_DLC12.ipynb
+top_n_pred_indices.csv
+X_selected.csv
+X_total.csv
+Interface
+_data
