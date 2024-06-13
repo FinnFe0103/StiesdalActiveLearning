@@ -2,30 +2,25 @@ import itertools
 import random
 import time
 import datetime
-import openpyxl
 import pandas as pd
 import numpy as np
 from joblib import Parallel, delayed
 from multi_main import RunModel
-from multi_data import Dataprep, update_data
+from multi_data import Dataprep
 from tqdm import tqdm
 
 # set seeds for reproducibility
 random.seed(42)
 np.random.seed(42)
 
-hyperparameter_spaces = {'GP': {'learning_rate': [0.1], 'kernel': ['Matern'], 'lengthscale_prior': [None], 'lengthscale_sigma': [0.01], 'lengthscale_mean': [1.0], 'noise_prior': [None], 'noise_sigma': [0.1], 'noise_mean': [1.0], 'noise_constraint': [1e-6], 'lengthscale_type': ['ARD'], 'acquisition_function': ['UCB'], 'reg_lambda': [0.001]}, }#36 # RBF*Matern promising
-                         #'SVR': {'acquisition_function': ['EX'], 'kernel': ['rbf', 'sigmoid', 'poly'], 'C': [1, 5, 10], 'epsilon': [0.01, 0.05, 0.1]}, }
-                         #'GP': {'learning_rate': [0.01, 0.1], 'kernel': ['Matern', 'Periodic'], 'lengthscale_prior': [None], 'lengthscale_sigma': [0.01, 0.1, 1], 'lengthscale_mean': [1.0], 'noise_prior': [None], 'noise_sigma': [0.01, 0.1, 0.5], 'noise_mean': [1.0], 'noise_constraint': [1e-6], 'lengthscale_type': ['Single', 'ARD'], 'acquisition_function': ['US', 'UCB', 'RS'], 'reg_lambda': [0.001, 0.01, 0.05]}, }#36 # RBF*Matern promising
-#only if time:           #'GP': {'learning_rate': [0.01, 0.05, 0.1], 'kernel': ['RBF+Linear', 'RBF+Periodic', 'RBF*Periodic', 'RBF*Linear', 'RBF+Matern','RBF*Matern','Matern+Linear','Matern*Linear', 'Matern*Periodic', 'Periodic*Linear', 'Periodic+Linear'], 'lengthscale_prior': [None], 'lengthscale_sigma': [0.01, 0.05, 0.1, 0.5, 1], 'lengthscale_mean': [1.0], 'noise_prior': [None], 'noise_sigma': [0.01, 0.05, 0.1, 0.2, 0.5], 'noise_mean': [1.0], 'noise_constraint': [1e-1, 1e-3, 1e-6], 'lengthscale_type': ['Single', 'ARD'], 'acquisition_function': ['US', 'UCB', 'RS'], 'reg_lambda': [0.001, 0.01, 0.05]}, }#36 # RBF*Matern promising
+hyperparameter_spaces = {'GP': {'learning_rate': [0.1], 'kernel': ['Matern'], 'lengthscale_prior': [None], 'lengthscale_sigma': [0.01], 'lengthscale_mean': [1.0], 'noise_prior': [None], 'noise_sigma': [0.1], 'noise_mean': [1.0], 'noise_constraint': [1e-6], 'lengthscale_type': ['ARD'], 'acquisition_function': ['UCB'], 'reg_lambda': [0.001]}, }
 
 directory = 'runs' + '_' + datetime.datetime.now().strftime("%m-%d %H:%M") # Directory to save the results
-plot = False # Whether to plot the results in the last step
+plot = True # Whether to plot the results in the last step
 steps = 5 # Number of steps to run the active learning algorithm for
 epochs = 100 # Number of epochs to train the model for
 num_combinations = 4000  # Number of random combinations to generate for each model (random search), set to really high value for grid search
 
-sensors = ['49', '52', '59', '60', '164', '1477', '1493', '1509', '1525', '1541', '1563', '2348']
 sensors = ['49', '52', '59', '60', '164', '1477', '1493', '1509', '1525', '1541', '1563', '2348']
 all_combinations = []
 total_models = len(hyperparameter_spaces)
@@ -49,7 +44,7 @@ def process_combination(model_name, combination, sensors, steps, epochs, directo
     model_instances = []
     for index, sensor in enumerate(sensors):
         run_name = f"{sensor}_{combination_id}"
-        model = RunModel(model_name=model_name, run_name=run_name, directory=directory, x_total=data.X, y_total=data.Y[:, index], steps=steps, epochs=epochs, **combination)
+        model = RunModel(model_name=model_name, run_name=run_name, directory=directory, steps=steps, epochs=epochs, **combination) #, x_total=data.X, y_total=data.Y[:, index]
         model_instances.append(model)
 
     xyz = []
@@ -85,9 +80,9 @@ def process_combination(model_name, combination, sensors, steps, epochs, directo
                     tqdm.write(f'---Final prediction time: {time.time() - final_prediction_time:.2f} seconds')
 
                     # Evaluate the model on the pool data
-                    evaluate_pool_data_time = time.time()
-                    model.evaluate_pool_data(step=step, X_pool=data.X_pool, y_pool=data.Y_pool[:, index]) 
-                    tqdm.write(f'---Evaluation on pool data time: {time.time() - evaluate_pool_data_time:.2f} seconds')
+                    # evaluate_pool_data_time = time.time()
+                    # model.evaluate_pool_data(step=step, X_pool=data.X_pool, y_pool=data.Y_pool[:, index]) 
+                    # tqdm.write(f'---Evaluation on pool data time: {time.time() - evaluate_pool_data_time:.2f} seconds')
 
                     # Predict the uncertainty on the pool data
                     predict_time = time.time()
