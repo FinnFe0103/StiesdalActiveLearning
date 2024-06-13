@@ -165,9 +165,9 @@ with pd.ExcelWriter(excel_filename, engine='openpyxl') as writer:
         sheet_name = f'Step_{step}'
         df.to_excel(writer, sheet_name=sheet_name, index=False)
 
-# Calculate the end time and time taken
+# Calculate the end time and time taken to run the models
 end = time.time()
 length = end - start
 
-# Show the results : this can be altered however you like
+# Print the time taken to run the models
 print("It took", length, "seconds to run", total_models, "models for", steps, "steps")
