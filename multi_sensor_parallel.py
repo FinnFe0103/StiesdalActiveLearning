@@ -13,11 +13,11 @@ from tqdm import tqdm
 #### CODE PARAMETERS ####
 #########################
 directory = 'runs' + '_' + datetime.datetime.now().strftime("%m-%d %H:%M") # Directory to save the results
-plot = True # Whether to plot the results in the last step
+plot = False # Whether to plot the results in the last step
 steps = 20 # Number of steps to run the active learning algorithm for
 epochs = 100 # Number of epochs to train the model for
-num_combinations = 4000  # Number of random combinations to generate for each model (random search), set to really high value for grid search
-samples_per_step = 36
+num_combinations = 4000  # Number of random combinations to generate for each model (random search), set to really high value for grid search (only if more than one hyperparameter combination)
+samples_per_step = 36 # Number of samples to select from the pool data per step
 
 # set seeds for reproducibility
 random.seed(42)
@@ -29,7 +29,7 @@ hyperparameter_spaces = {'GP': {'learning_rate': [0.1], 'kernel': ['Matern'], 'l
 # Selected sensors
 sensors = ['49', '52', '59', '60', '164', '1477', '1493', '1509', '1525', '1541', '1563', '2348']
 
-# create all combinations of hyperparameters
+# create all combinations of hyperparameters (only if more than one hyperparameter combination)
 all_combinations = []
 total_models = len(hyperparameter_spaces)
 for model_name, params_space in hyperparameter_spaces.items():
@@ -44,7 +44,7 @@ print(f"Total combinations: {len(all_combinations)}")
 print(all_combinations)
 
 # Function to process each combination
-def process_combination(model_name, combination, sensors, steps, epochs, directory, plot):       
+def process_combination(model_name, combination, sensors, steps, epochs, directory, plot):
     '''
     Function to process each combination of hyperparameters for a model
     

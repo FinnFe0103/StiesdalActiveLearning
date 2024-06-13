@@ -54,10 +54,10 @@ class Dataprep:
         # Initialize the scaler for x and y
         if scaling == 'Standard':
             scaler_x = StandardScaler()
-            scaler_y = StandardScaler()
+            scaler_y = StandardScaler() # leave out?
         elif scaling == 'Minmax': 
             scaler_x = MinMaxScaler() 
-            scaler_y = MinMaxScaler()
+            scaler_y = MinMaxScaler() # leave out?
         elif scaling == 'None':
             return x, y
         else:
